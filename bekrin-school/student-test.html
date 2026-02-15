@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test - Bekrin School</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: #f5f5f5;
+        }
+
+        /* Timer - Fixed Top */
+        .timer-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: white;
+            padding: 15px 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 1000;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .timer-info {
+            display: flex;
+            align-items: center;
+            gap: 30px;
+        }
+
+        .test-name {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .timer-display {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 24px;
+            font-weight: bold;
+            color: #2196F3;
+            padding: 8px 20px;
+            background: #E3F2FD;
+            border-radius: 8px;
+        }
+
+        .timer-display.warning {
+            color: #FF5722;
+            background: #FFEBEE;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        .timer-icon {
+            font-size: 28px;
+        }
+
+        .submit-btn {
+            padding: 12px 30px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .submit-btn:hover {
+            background: #45a049;
+            transform: translateY(-2px);
+        }
+
+        .submit-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Main Container */
+        .test-container {
+            display: flex;
+            height: calc(100vh - 70px);
+            margin-top: 70px;
+        }
+
+        /* Left: PDF Viewer */
+        .pdf-section {
+            flex: 1;
+            background: #525659;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .pdf-controls {
+            background: #424242;
+            padding: 10px 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 15px;
+            color: white;
+        }
+
+        .pdf-btn {
+            padding: 8px 16px;
+            background: #616161;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .pdf-btn:hover {
+            background: #757575;
+        }
+
+        .pdf-btn:disabled {
+            background: #424242;
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        .page-info {
+            font-size: 14px;
+        }
+
+        .pdf-viewer {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding: 20px;
+        }
+
+        #pdfCanvas {
+            max-width: 100%;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        }
+
+        /* Right: Answer Panel */
+        .answer-section {
+            width: 400px;
+            background: white;
+            display: flex;
+            flex-direction: column;
+            border-left: 1px solid #ddd;
+        }
+
+        .answer-header {
+            padding: 20px;
+            background: #2196F3;
+            color: white;
+        }
+
+        .answer-header h2 {
+            font-size: 20px;
+            margin-bottom: 5px;
+        }
+
+        .answer-stats {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .answers-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .question-item {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f9f9f9;
+            border-radius: 8px;
+            border-left: 4px solid #2196F3;
+        }
+
+        .question-item.answered {
+            background: #E8F5E9;
+            border-left-color: #4CAF50;
+        }
+
+        .question-number {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 15px;
+        }
+
+        /* Qapalı suallar */
+        .radio-options {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .radio-option {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .radio-option:hover {
+            border-color: #2196F3;
+            background: #f5f9ff;
+        }
+
+        .radio-option input[type="radio"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+
+        .radio-option label {
+            cursor: pointer;
+            font-size: 15px;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .radio-option input[type="radio"]:checked + label {
+            color: #2196F3;
+        }
+
+        /* Açıq suallar */
+        .open-input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 15px;
+            transition: all 0.3s;
+        }
+
+        .open-input:focus {
+            outline: none;
+            border-color: #2196F3;
+            background: #f5f9ff;
+        }
+
+        /* Yazı işləri */
+        .canvas-container {
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            overflow: hidden;
+            background: white;
+        }
+
+        .canvas-tools {
+            background: #f5f5f5;
+            padding: 10px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .tool-btn {
+            padding: 6px 12px;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.3s;
+        }
+
+        .tool-btn:hover {
+            background: #e3f2fd;
+            border-color: #2196F3;
+        }
+
+        .tool-btn.active {
+            background: #2196F3;
+            color: white;
+            border-color: #2196F3;
+        }
+
+        .writing-canvas {
+            width: 100%;
+            height: 300px;
+            display: block;
+            cursor: crosshair;
+        }
+
+        .question-type-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+
+        .badge-closed {
+            background: #E3F2FD;
+            color: #2196F3;
+        }
+
+        .badge-open {
+            background: #FFF3E0;
+            color: #F57C00;
+        }
+
+        .badge-writing {
+            background: #F3E5F5;
+            color: #9C27B0;
+        }
+
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-size: 20px;
+            color: #666;
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .test-container {
+                flex-direction: column;
+            }
+
+            .answer-section {
+                width: 100%;
+                height: 50vh;
+            }
+
+            .pdf-section {
+                height: 50vh;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Screen -->
+    <div id="loadingScreen" class="loading">
+        <div>Yüklənir...</div>
+    </div>
+
+    <!-- Timer Bar -->
+    <div class="timer-bar" id="timerBar" style="display: none;">
+        <div class="timer-info">
+            <div class="test-name" id="testNameDisplay">Test adı</div>
+            <div class="timer-display" id="timerDisplay">
+                <span class="timer-icon">⏱️</span>
+                <span id="timerText">40:00</span>
+            </div>
+        </div>
+        <button class="submit-btn" id="submitBtn">Göndər</button>
+    </div>
+
+    <!-- Main Container -->
+    <div class="test-container" id="testContainer" style="display: none;">
+        <!-- Left: PDF Viewer -->
+        <div class="pdf-section">
+            <div class="pdf-controls">
+                <button class="pdf-btn" id="prevPageBtn">◀ Əvvəlki</button>
+                <span class="page-info">
+                    Səhifə <span id="currentPage">1</span> / <span id="totalPages">1</span>
+                </span>
+                <button class="pdf-btn" id="nextPageBtn">Növbəti ▶</button>
+            </div>
+            <div class="pdf-viewer">
+                <canvas id="pdfCanvas"></canvas>
+            </div>
+        </div>
+
+        <!-- Right: Answer Panel -->
+        <div class="answer-section">
+            <div class="answer-header">
+                <h2>Cavablar</h2>
+                <div class="answer-stats">
+                    <span id="answeredCount">0</span> / <span id="totalQuestions">30</span> cavablandı
+                </div>
+            </div>
+            <div class="answers-list" id="answersList">
+                <!-- Dinamik olaraq JavaScript ilə doldurulacaq -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+
+    <!-- PDF.js Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+
+    <!-- Custom JS -->
+    <script src="student-test.js"></script>
+</body>
+</html>

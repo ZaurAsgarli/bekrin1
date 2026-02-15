@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bulk Import - Bekrin School</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+
+        .back-btn {
+            display: inline-block;
+            margin-bottom: 20px;
+            color: #f5576c;
+            text-decoration: none;
+            font-weight: bold;
+        }
+
+        .back-btn:hover {
+            text-decoration: underline;
+        }
+
+        h1 {
+            color: #f5576c;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+        }
+
+        .info-box {
+            background: #fff3e0;
+            border-left: 4px solid #ff9800;
+            padding: 20px;
+            margin-bottom: 25px;
+            border-radius: 8px;
+        }
+
+        .info-box h3 {
+            color: #e65100;
+            margin-bottom: 10px;
+        }
+
+        .info-box ul {
+            margin-left: 20px;
+            line-height: 1.8;
+            color: #555;
+        }
+
+        .example-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196F3;
+            padding: 20px;
+            margin-bottom: 25px;
+            border-radius: 8px;
+        }
+
+        .example-box h3 {
+            color: #1976D2;
+            margin-bottom: 15px;
+        }
+
+        .example-box pre {
+            background: #263238;
+            color: #aed581;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 400px;
+            padding: 20px;
+            border: 3px solid #ddd;
+            border-radius: 12px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            margin-bottom: 20px;
+            resize: vertical;
+            transition: border-color 0.3s;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: #f5576c;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 15px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(245, 87, 108, 0.4);
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #218838;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        .status {
+            margin-top: 20px;
+            padding: 20px;
+            border-radius: 12px;
+            display: none;
+        }
+
+        .status.success {
+            background: #d4edda;
+            border: 2px solid #c3e6cb;
+            color: #155724;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            border: 2px solid #f5c6cb;
+            color: #721c24;
+        }
+
+        .status h3 {
+            margin-bottom: 10px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 30px;
+            display: none;
+        }
+
+        .spinner {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #f5576c;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #f0f0f0;
+            border-radius: 15px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            width: 0%;
+            transition: width 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="teacher-coding-exercises.html" class="back-btn">← Geri</a>
+        
+        <h1>📦 Bulk Import - Çoxlu Məsələ Əlavə Et</h1>
+        <p class="subtitle">JSON formatında bir dəfəyə çoxlu məsələ yükləyin</p>
+
+        <div class="info-box">
+            <h3>📝 İstifadə Qaydası:</h3>
+            <ul>
+                <li>Aşağıdakı JSON formatında məsələləri hazırlayın</li>
+                <li>Məsələləri textarea-ya yapışdırın və ya yazın</li>
+                <li>"✅ Əlavə Et" düyməsinə basın</li>
+                <li>Bütün məsələlər avtomatik Firestore-a yüklənəcək</li>
+                <li>Nümunə JSON yükləmək üçün "📄 Nümunə Yüklə" düyməsini istifadə edin</li>
+            </ul>
+        </div>
+
+        <div class="example-box">
+            <h3>💡 JSON Format Nümunəsi:</h3>
+            <pre>[
+  {
+    "topic": "Python Əsasları",
+    "title": "İki ədədin cəmi",
+    "description": "İki tam ədədi toplayıb nəticəni qaytaran funksiya yazın.",
+    "starterCode": "def cem(a, b):\\n    # Kodunu bura yaz\\n    pass",
+    "testCases": [
+      {"input": "cem(2, 3)", "expected": "5"},
+      {"input": "cem(10, 20)", "expected": "30"}
+    ],
+    "difficulty": "Asan",
+    "points": 10,
+    "order": 1
+  },
+  {
+    "topic": "Şərtlər",
+    "title": "Müsbət ədəd yoxlaması",
+    "description": "Ədədin müsbət olub-olmadığını yoxlayan funksiya.",
+    "starterCode": "def musbetdir(n):\\n    # Kodunu bura yaz\\n    pass",
+    "testCases": [
+      {"input": "musbetdir(5)", "expected": "True"},
+      {"input": "musbetdir(-3)", "expected": "False"}
+    ],
+    "difficulty": "Asan",
+    "points": 10,
+    "order": 2
+  }
+]</pre>
+        </div>
+
+        <div class="button-group">
+            <button class="btn btn-success" onclick="loadSample()">
+                📄 Nümunə Yüklə
+            </button>
+            <button class="btn btn-secondary" onclick="clearTextarea()">
+                🗑️ Təmizlə
+            </button>
+            <button class="btn btn-secondary" onclick="validateJSON()">
+                ✔️ JSON Yoxla
+            </button>
+        </div>
+
+        <textarea id="jsonInput" placeholder='JSON formatında məsələləri buraya yapışdırın...'></textarea>
+
+        <button class="btn btn-primary" id="importBtn" onclick="importExercises()">
+            ✅ Əlavə Et
+        </button>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p id="loadingText">Məsələlər əlavə edilir...</p>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill">0%</div>
+            </div>
+        </div>
+
+        <div class="status" id="status"></div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getAuth, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+        import { getFirestore, collection, addDoc, serverTimestamp, doc, getDoc } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyDE05ufg0FhPIAecIJ_ehr9yIFQKxIwncA",
+            authDomain: "bekrinschool.firebaseapp.com",
+            projectId: "bekrinschool",
+            storageBucket: "bekrinschool.firebasestorage.app",
+            messagingSenderId: "678081137706",
+            appId: "1:678081137706:web:75601b998dde21f25f0753"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // Auth yoxlaması
+        onAuthStateChanged(auth, async (user) => {
+            if (!user) {
+                window.location.href = 'index.html';
+                return;
+            }
+
+            const userDoc = await getDoc(doc(db, 'users', user.email));
+            if (!userDoc.exists() || userDoc.data().role !== 'teacher') {
+                alert('Bu səhifəyə yalnız müəllimlər daxil ola bilər');
+                await signOut(auth);
+                window.location.href = 'index.html';
+            }
+        });
+
+        // Nümunə yüklə
+        window.loadSample = function() {
+            const sample = [
+                {
+                    "topic": "Şərtlər və Əməliyyatlar",
+                    "title": "Əvvəlki cüt ədəd",
+                    "description": "2-dən böyük N natural ədədi daxil edilmişdir. N ədədindən əvvəlki cüt ədədi çap edən proqram yazın.",
+                    "starterCode": "# N ədədini daxil edin\\nN = int(input())\\n\\n# Əvvəlki cüt ədədi tapın və çap edin\\n# Kodunuzu buraya yazın",
+                    "testCases": [
+                        {"input": "5", "expected": "4", "description": "N=5 üçün əvvəlki cüt ədəd 4-dür"},
+                        {"input": "8", "expected": "6", "description": "N=8 üçün əvvəlki cüt ədəd 6-dır"}
+                    ],
+                    "difficulty": "Asan",
+                    "points": 15,
+                    "order": 53
+                },
+                {
+                    "topic": "Şərtlər",
+                    "title": "Üçbucağın növü",
+                    "description": "Tərəflərinin uzunluğu verilmiş üçbucağın növünü (bərabərtərəfli, bərabəryanlı və ya müxtəliftərəfli) müəyyənləşdirən proqram yazın.",
+                    "starterCode": "# Üçbucağın tərəflərini daxil edin\\na = int(input())\\nb = int(input())\\nc = int(input())\\n\\n# Üçbucağın növünü müəyyənləşdirin",
+                    "testCases": [
+                        {"input": "5\\n5\\n5", "expected": "berabertarefli"},
+                        {"input": "5\\n5\\n7", "expected": "beraberyanli"}
+                    ],
+                    "difficulty": "Orta",
+                    "points": 20,
+                    "order": 54
+                }
+            ];
+
+            document.getElementById('jsonInput').value = JSON.stringify(sample, null, 2);
+        };
+
+        // Textarea təmizlə
+        window.clearTextarea = function() {
+            if (confirm('Məzmunu təmizləmək istədiyinizə əminsiniz?')) {
+                document.getElementById('jsonInput').value = '';
+            }
+        };
+
+        // JSON validasiya
+        window.validateJSON = function() {
+            const jsonInput = document.getElementById('jsonInput');
+            const status = document.getElementById('status');
+
+            try {
+                const data = JSON.parse(jsonInput.value);
+                
+                if (!Array.isArray(data)) {
+                    throw new Error('JSON array formatında olmalıdır');
+                }
+
+                if (data.length === 0) {
+                    throw new Error('Ən azı bir məsələ olmalıdır');
+                }
+
+                // Hər məsələni yoxla
+                data.forEach((ex, i) => {
+                    if (!ex.topic) throw new Error(`Məsələ ${i + 1}: mövzu yoxdur`);
+                    if (!ex.title) throw new Error(`Məsələ ${i + 1}: başlıq yoxdur`);
+                    if (!ex.description) throw new Error(`Məsələ ${i + 1}: təsvir yoxdur`);
+                    if (!ex.starterCode) throw new Error(`Məsələ ${i + 1}: başlanğıc kodu yoxdur`);
+                    if (!ex.testCases || ex.testCases.length === 0) {
+                        throw new Error(`Məsələ ${i + 1}: test case-lər yoxdur`);
+                    }
+                    if (!ex.difficulty) throw new Error(`Məsələ ${i + 1}: çətinlik yoxdur`);
+                    if (!ex.points) throw new Error(`Məsələ ${i + 1}: xal yoxdur`);
+                });
+
+                status.className = 'status success';
+                status.style.display = 'block';
+                status.innerHTML = `
+                    <h3>✅ JSON Düzgündür!</h3>
+                    <p><strong>${data.length}</strong> məsələ tapıldı və hamısı düzgün formatdadır.</p>
+                `;
+            } catch (error) {
+                status.className = 'status error';
+                status.style.display = 'block';
+                status.innerHTML = `
+                    <h3>❌ JSON Xətası</h3>
+                    <p>${error.message}</p>
+                `;
+            }
+        };
+
+        // Məsələləri import et
+        window.importExercises = async function() {
+            const btn = document.getElementById('importBtn');
+            const loading = document.getElementById('loading');
+            const status = document.getElementById('status');
+            const jsonInput = document.getElementById('jsonInput');
+            const progressFill = document.getElementById('progressFill');
+            const loadingText = document.getElementById('loadingText');
+
+            try {
+                btn.disabled = true;
+                loading.style.display = 'block';
+                status.style.display = 'none';
+
+                // JSON parse et
+                const exercises = JSON.parse(jsonInput.value);
+
+                if (!Array.isArray(exercises)) {
+                    throw new Error('JSON array formatında olmalıdır');
+                }
+
+                if (exercises.length === 0) {
+                    throw new Error('Ən azı bir məsələ olmalıdır');
+                }
+
+                console.log('📝 Əlavə ediləcək məsələlər:', exercises.length);
+
+                // Hər bir məsələni əlavə et
+                let addedCount = 0;
+                const total = exercises.length;
+
+                for (const exercise of exercises) {
+                    // Məcburi sahələri yoxla
+                    if (!exercise.topic || !exercise.title || !exercise.description || 
+                        !exercise.starterCode || !exercise.testCases || !exercise.difficulty || !exercise.points) {
+                        throw new Error(`Məsələ "${exercise.title || 'Adsız'}" üçün məcburi sahələr yoxdur`);
+                    }
+
+                    const exerciseData = {
+                        ...exercise,
+                        createdAt: serverTimestamp(),
+                        createdBy: auth.currentUser.email
+                    };
+
+                    await addDoc(collection(db, 'codingExercises'), exerciseData);
+                    addedCount++;
+                    
+                    // Progress yenilə
+                    const progress = Math.round((addedCount / total) * 100);
+                    progressFill.style.width = progress + '%';
+                    progressFill.textContent = progress + '%';
+                    loadingText.textContent = `${addedCount}/${total} məsələ əlavə edildi...`;
+                    
+                    console.log(`✅ ${addedCount}/${total}: ${exercise.title}`);
+                }
+
+                // Uğurlu mesaj
+                status.className = 'status success';
+                status.style.display = 'block';
+                status.innerHTML = `
+                    <h3>✅ Uğurla Əlavə Edildi!</h3>
+                    <p><strong>${addedCount}</strong> məsələ Firestore-a yükləndi</p>
+                    <p style="margin-top: 15px;">
+                        <a href="teacher-coding-exercises.html" style="color: #155724; font-weight: bold; text-decoration: underline;">
+                            Məsələlərə bax →
+                        </a>
+                    </p>
+                `;
+
+                // Input-u təmizlə
+                jsonInput.value = '';
+
+            } catch (error) {
+                console.error('❌ Xəta:', error);
+                status.className = 'status error';
+                status.style.display = 'block';
+                status.innerHTML = `
+                    <h3>❌ Xəta</h3>
+                    <p><strong>${error.message}</strong></p>
+                    <p style="margin-top: 10px; font-size: 14px; color: #666;">
+                        JSON formatını yoxlayın və yenidən cəhd edin
+                    </p>
+                `;
+            } finally {
+                btn.disabled = false;
+                loading.style.display = 'none';
+                progressFill.style.width = '0%';
+                progressFill.textContent = '0%';
+            }
+        };
+
+        // Global exports
+        window.db = db;
+        window.auth = auth;
+    </script>
+</body>
+</html>

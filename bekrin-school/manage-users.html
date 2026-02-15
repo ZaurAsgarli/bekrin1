@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>İstifadəçiləri İdarə Et - Bekrin School</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- DataTables CSS -->
+    <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px 0;
+        }
+        
+        .container-fluid {
+            max-width: 1400px;
+        }
+        
+        .card {
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        
+        .card-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 15px 15px 0 0 !important;
+            padding: 20px;
+        }
+        
+        .badge-student {
+            background: #007bff;
+        }
+        
+        .badge-parent {
+            background: #28a745;
+        }
+        
+        .badge-teacher {
+            background: #ffc107;
+        }
+        
+        .incomplete-data {
+            background-color: #fff3cd !important;
+        }
+        
+        .modal-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-back {
+            background: #6c757d;
+            color: white;
+            border: none;
+        }
+        
+        .btn-back:hover {
+            background: #5a6268;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <!-- Header Card -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div>
+                    <h3 class="mb-0">
+                        <i class="fas fa-users-cog"></i> İstifadəçiləri İdarə Et
+                    </h3>
+                    <p class="mb-0 mt-2">Şagird və valideyn məlumatlarını redaktə edin</p>
+                </div>
+                <a href="teacher-dashboard.html" class="btn btn-back">
+                    <i class="fas fa-arrow-left"></i> Geri
+                </a>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="card mb-4">
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3">
+                        <select class="form-select" id="roleFilter">
+                            <option value="">Bütün Rollar</option>
+                            <option value="student">Şagird</option>
+                            <option value="parent">Valideyn</option>
+                            <option value="teacher">Müəllim</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <select class="form-select" id="completeFilter">
+                            <option value="">Hamısı</option>
+                            <option value="incomplete">Natamam Məlumatlar</option>
+                            <option value="complete">Tam Məlumatlar</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6 text-end">
+                        <span class="badge bg-warning text-dark">
+                            <i class="fas fa-exclamation-triangle"></i> Sarı sətir = Natamam məlumat
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Users Table -->
+        <div class="card">
+            <div class="card-body">
+                <table id="usersTable" class="table table-striped table-hover">
+                    <thead>
+                        <tr>
+                            <th>Email</th>
+                            <th>Tam Ad</th>
+                            <th>Rol</th>
+                            <th>Sinif</th>
+                            <th>Telefon</th>
+                            <th>Status</th>
+                            <th>Əməliyyatlar</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Data will be loaded here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Modal -->
+    <div class="modal fade" id="editModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="fas fa-user-edit"></i> İstifadəçi Məlumatlarını Redaktə Et
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="editForm">
+                        <input type="hidden" id="editEmail">
+                        
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Email (Dəyişdirilə bilməz)</label>
+                                <input type="email" class="form-control" id="displayEmail" readonly>
+                            </div>
+                            
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Rol</label>
+                                <input type="text" class="form-control" id="displayRole" readonly>
+                            </div>
+                        </div>
+                        
+                        <!-- Student Fields -->
+                        <div id="studentFields" style="display: none;">
+                            <h6 class="border-bottom pb-2 mb-3">Şagird Məlumatları</h6>
+                            
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">
+                                        Tam Ad <span class="text-danger">*</span>
+                                    </label>
+                                    <input type="text" class="form-control" id="studentFullName" required>
+                                </div>
+                                
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">
+                                        Sinif <span class="text-danger">*</span>
+                                    </label>
+                                    <input type="text" class="form-control" id="studentGrade" placeholder="5A, 7B, 9C" required>
+                                </div>
+                            </div>
+                            
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">Şagird Telefonu</label>
+                                    <input type="tel" class="form-control" id="studentPhone" placeholder="+994501234567">
+                                </div>
+                                
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">Valideyn Email</label>
+                                    <input type="email" class="form-control" id="studentParentEmail" readonly>
+                                </div>
+                            </div>
+                            
+                            <h6 class="border-bottom pb-2 mb-3 mt-4">Valideyn Məlumatları</h6>
+                            
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">Valideyn Adı</label>
+                                    <input type="text" class="form-control" id="studentParentName" placeholder="Əli Əliyev">
+                                </div>
+                                
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">Valideyn Telefonu</label>
+                                    <input type="tel" class="form-control" id="studentParentPhone" placeholder="+994501234568">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Parent Fields -->
+                        <div id="parentFields" style="display: none;">
+                            <h6 class="border-bottom pb-2 mb-3">Valideyn Məlumatları</h6>
+                            
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">Tam Ad</label>
+                                    <input type="text" class="form-control" id="parentFullName" placeholder="Əli Əliyev">
+                                </div>
+                                
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">Telefon</label>
+                                    <input type="tel" class="form-control" id="parentPhone" placeholder="+994501234567">
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Şagird Email (Bağlı)</label>
+                                <input type="email" class="form-control" id="parentStudentEmail" readonly>
+                            </div>
+                        </div>
+                        
+                        <!-- Teacher Fields -->
+                        <div id="teacherFields" style="display: none;">
+                            <h6 class="border-bottom pb-2 mb-3">Müəllim Məlumatları</h6>
+                            
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">Tam Ad</label>
+                                    <input type="text" class="form-control" id="teacherFullName">
+                                </div>
+                                
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">Telefon</label>
+                                    <input type="tel" class="form-control" id="teacherPhone" placeholder="+994501234567">
+                                </div>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                        <i class="fas fa-times"></i> Ləğv Et
+                    </button>
+                    <button type="button" class="btn btn-success" onclick="saveUser()">
+                        <i class="fas fa-save"></i> Yadda Saxla
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    
+    <!-- jQuery & Bootstrap -->
+    <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- DataTables -->
+    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+
+    <script>
+        // Firebase Configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyDWvF0gA3jOEvvL_NBlZYYzZCp5zJaEipQ",
+            authDomain: "bekrinschool.firebaseapp.com",
+            projectId: "bekrinschool",
+            storageBucket: "bekrinschool.firebasestorage.app",
+            messagingSenderId: "454184965568",
+            appId: "1:454184965568:web:49b29cd17a0fc7e54f6c2d"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        let dataTable;
+        let allUsers = [];
+
+        // Check authentication
+        auth.onAuthStateChanged(async user => {
+            if (!user) {
+                alert('⚠️ Sistemə daxil olmamısınız!');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            // Check role
+            const userDoc = await db.collection('users').doc(user.email).get();
+            if (!userDoc.exists || userDoc.data().role !== 'teacher') {
+                alert('⚠️ Bu səhifəyə yalnız müəllimlər daxil ola bilər!');
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            // Load users
+            loadUsers();
+        });
+
+        // Load all users
+        async function loadUsers() {
+            try {
+                const usersSnapshot = await db.collection('users').orderBy('email').get();
+                
+                allUsers = [];
+                usersSnapshot.forEach(doc => {
+                    allUsers.push({
+                        id: doc.id,
+                        ...doc.data()
+                    });
+                });
+                
+                displayUsers(allUsers);
+                
+            } catch (error) {
+                console.error('Xəta:', error);
+                alert('İstifadəçilər yüklənə bilmədi!');
+            }
+        }
+
+        // Display users in table
+        function displayUsers(users) {
+            if (dataTable) {
+                dataTable.destroy();
+            }
+            
+            const tbody = document.querySelector('#usersTable tbody');
+            tbody.innerHTML = '';
+            
+            users.forEach(user => {
+                const isIncomplete = checkIncomplete(user);
+                const row = tbody.insertRow();
+                
+                if (isIncomplete) {
+                    row.classList.add('incomplete-data');
+                }
+                
+                row.innerHTML = `
+                    <td>${user.email}</td>
+                    <td>${user.fullName || '<span class="text-muted">Boş</span>'}</td>
+                    <td>
+                        <span class="badge badge-${user.role}">
+                            ${getRoleText(user.role)}
+                        </span>
+                    </td>
+                    <td>${user.grade || '-'}</td>
+                    <td>${user.phone || '<span class="text-muted">Boş</span>'}</td>
+                    <td>
+                        ${isIncomplete ? 
+                            '<span class="badge bg-warning text-dark">Natamam</span>' : 
+                            '<span class="badge bg-success">Tam</span>'}
+                    </td>
+                    <td>
+                        <button class="btn btn-sm btn-primary" onclick="editUser('${user.email}')">
+                            <i class="fas fa-edit"></i> Redaktə
+                        </button>
+                    </td>
+                `;
+            });
+            
+            // Initialize DataTable
+            dataTable = $('#usersTable').DataTable({
+                language: {
+                    url: '//cdn.datatables.net/plug-ins/1.13.6/i18n/az.json'
+                },
+                pageLength: 25,
+                order: [[2, 'asc'], [0, 'asc']]
+            });
+        }
+
+        // Check if user data is incomplete
+        function checkIncomplete(user) {
+            if (user.role === 'student') {
+                return !user.fullName || !user.grade || !user.phone || 
+                       !user.parentName || !user.parentPhone;
+            } else if (user.role === 'parent') {
+                return !user.fullName || !user.phone;
+            } else if (user.role === 'teacher') {
+                return !user.fullName || !user.phone;
+            }
+            return false;
+        }
+
+        // Get role text
+        function getRoleText(role) {
+            const roles = {
+                student: 'Şagird',
+                parent: 'Valideyn',
+                teacher: 'Müəllim',
+                admin: 'Admin'
+            };
+            return roles[role] || role;
+        }
+
+        // Edit user
+        function editUser(email) {
+            const user = allUsers.find(u => u.email === email);
+            if (!user) return;
+            
+            // Set common fields
+            document.getElementById('editEmail').value = user.email;
+            document.getElementById('displayEmail').value = user.email;
+            document.getElementById('displayRole').value = getRoleText(user.role);
+            
+            // Hide all role-specific fields
+            document.getElementById('studentFields').style.display = 'none';
+            document.getElementById('parentFields').style.display = 'none';
+            document.getElementById('teacherFields').style.display = 'none';
+            
+            // Show and populate role-specific fields
+            if (user.role === 'student') {
+                document.getElementById('studentFields').style.display = 'block';
+                document.getElementById('studentFullName').value = user.fullName || '';
+                document.getElementById('studentGrade').value = user.grade || '';
+                document.getElementById('studentPhone').value = user.phone || '';
+                document.getElementById('studentParentEmail').value = user.parentEmail || '';
+                document.getElementById('studentParentName').value = user.parentName || '';
+                document.getElementById('studentParentPhone').value = user.parentPhone || '';
+            } else if (user.role === 'parent') {
+                document.getElementById('parentFields').style.display = 'block';
+                document.getElementById('parentFullName').value = user.fullName || '';
+                document.getElementById('parentPhone').value = user.phone || '';
+                document.getElementById('parentStudentEmail').value = user.studentEmail || '';
+            } else if (user.role === 'teacher') {
+                document.getElementById('teacherFields').style.display = 'block';
+                document.getElementById('teacherFullName').value = user.fullName || '';
+                document.getElementById('teacherPhone').value = user.phone || '';
+            }
+            
+            // Show modal
+            const modal = new bootstrap.Modal(document.getElementById('editModal'));
+            modal.show();
+        }
+
+        // Save user
+        async function saveUser() {
+            try {
+                const email = document.getElementById('editEmail').value;
+                const user = allUsers.find(u => u.email === email);
+                
+                let updateData = {
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                };
+                
+                if (user.role === 'student') {
+                    updateData.fullName = document.getElementById('studentFullName').value;
+                    updateData.grade = document.getElementById('studentGrade').value;
+                    updateData.phone = document.getElementById('studentPhone').value;
+                    updateData.parentName = document.getElementById('studentParentName').value;
+                    updateData.parentPhone = document.getElementById('studentParentPhone').value;
+                } else if (user.role === 'parent') {
+                    updateData.fullName = document.getElementById('parentFullName').value;
+                    updateData.phone = document.getElementById('parentPhone').value;
+                } else if (user.role === 'teacher') {
+                    updateData.fullName = document.getElementById('teacherFullName').value;
+                    updateData.phone = document.getElementById('teacherPhone').value;
+                }
+                
+                await db.collection('users').doc(email).update(updateData);
+                
+                alert('✅ Məlumatlar uğurla yeniləndi!');
+                
+                // Close modal
+                const modal = bootstrap.Modal.getInstance(document.getElementById('editModal'));
+                modal.hide();
+                
+                // Reload users
+                loadUsers();
+                
+            } catch (error) {
+                console.error('Xəta:', error);
+                alert('❌ Xəta: ' + error.message);
+            }
+        }
+
+        // Filters
+        document.getElementById('roleFilter').addEventListener('change', applyFilters);
+        document.getElementById('completeFilter').addEventListener('change', applyFilters);
+
+        function applyFilters() {
+            const roleFilter = document.getElementById('roleFilter').value;
+            const completeFilter = document.getElementById('completeFilter').value;
+            
+            let filtered = allUsers;
+            
+            if (roleFilter) {
+                filtered = filtered.filter(u => u.role === roleFilter);
+            }
+            
+            if (completeFilter === 'incomplete') {
+                filtered = filtered.filter(u => checkIncomplete(u));
+            } else if (completeFilter === 'complete') {
+                filtered = filtered.filter(u => !checkIncomplete(u));
+            }
+            
+            displayUsers(filtered);
+        }
+    </script>
+</body>
+</html>

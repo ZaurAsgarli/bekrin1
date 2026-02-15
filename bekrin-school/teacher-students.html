@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Şagirdlər İdarəetməsi - Bekrin School</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        /* ✅ YENİ HEADER */
+        .header {
+            background: white;
+            padding: 20px 30px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .back-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .back-btn:hover {
+            background: #5568d3;
+            transform: translateX(-3px);
+        }
+
+        .header h1 {
+            color: #667eea;
+            font-size: 28px;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .tabs {
+            background: white;
+            padding: 15px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 10px;
+        }
+
+        .tab-btn {
+            padding: 12px 25px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 14px;
+            transition: all 0.3s;
+            background: #f0f0f0;
+            color: #666;
+        }
+
+        .tab-btn.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .tab-btn:hover:not(.active) {
+            background: #e0e0e0;
+        }
+
+        .table-container {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            overflow-x: auto;
+        }
+
+        /* ✅ COMPACT TABLE */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        thead {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        th {
+            padding: 12px 10px;
+            text-align: left;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        td {
+            padding: 10px;
+            border-bottom: 1px solid #f0f0f0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        tr:hover {
+            background: #f9f9f9;
+        }
+
+        /* ✅ COLUMN WIDTHS */
+        .col-no { width: 40px; text-align: center; }
+        .col-name { width: 150px; }
+        .col-class { width: 60px; text-align: center; }
+        .col-email { width: 220px; }
+        .col-phone { width: 120px; }
+        .col-balance { width: 80px; text-align: right; }
+        .col-actions { width: 120px; text-align: center; }
+
+        /* ✅ BUTTONS */
+        .btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .btn-edit {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-edit:hover {
+            background: #5568d3;
+        }
+
+        .btn-delete {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-delete:hover {
+            background: #dc2626;
+        }
+
+        .btn-add {
+            background: #10b981;
+            color: white;
+            padding: 12px 20px;
+            font-size: 14px;
+        }
+
+        .btn-add:hover {
+            background: #059669;
+        }
+
+        .btn-import {
+            background: #f59e0b;
+            color: white;
+            padding: 12px 20px;
+            font-size: 14px;
+        }
+
+        .btn-import:hover {
+            background: #d97706;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 5px;
+            justify-content: center;
+        }
+
+        .badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .badge-active {
+            background: #d1fae5;
+            color: #059669;
+        }
+
+        .badge-deleted {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+
+        .empty-state i {
+            font-size: 64px;
+            margin-bottom: 20px;
+            color: #ddd;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #667eea;
+        }
+
+        /* Modal (əgər lazım olarsa) */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            max-width: 500px;
+            width: 90%;
+        }
+
+        @media (max-width: 768px) {
+            .header {
+                flex-direction: column;
+                gap: 15px;
+            }
+
+            .header-actions {
+                width: 100%;
+                flex-direction: column;
+            }
+
+            table {
+                font-size: 12px;
+            }
+
+            td, th {
+                padding: 8px 5px;
+            }
+        }
+        /* ============================================
+        MODAL STİLLƏRİ
+        ============================================ */
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.6);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            animation: modalSlideIn 0.3s ease;
+        }
+
+        @keyframes modalSlideIn {
+            from {
+                transform: translateY(-50px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .modal-content h2 {
+            color: #667eea;
+            margin-bottom: 25px;
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+            font-size: 14px;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: 'Segoe UI', sans-serif;
+            transition: all 0.3s;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .modal-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 25px;
+        }
+
+        .btn-cancel {
+            background: #6c757d;
+            color: white;
+            padding: 12px 24px;
+        }
+
+        .btn-cancel:hover {
+            background: #5a6268;
+        }
+
+        .btn-save {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 24px;
+        }
+
+        .btn-save:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- ✅ YENİ HEADER -->
+        <div class="header">
+            <div class="header-left">
+                <button class="back-btn" onclick="window.location.href='teacher-dashboard.html'">
+                    <i class="fas fa-arrow-left"></i> Geri
+                </button>
+                <h1><i class="fas fa-user-graduate"></i> Şagirdlər İdarəetməsi</h1>
+            </div>
+            <div class="header-actions">
+                <button class="btn btn-add" onclick="addStudent()">
+                    <i class="fas fa-user-plus"></i> Yeni Şagird
+                </button>
+                <button class="btn btn-import" onclick="window.location.href='bulk-user-import.html'">
+                    <i class="fas fa-file-upload"></i> Bulk Import
+                </button>
+            </div>
+        </div>
+
+        <!-- TABS -->
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('active')">
+                <i class="fas fa-check-circle"></i> Aktiv Şagirdlər
+            </button>
+            <button class="tab-btn" onclick="switchTab('deleted')">
+                <i class="fas fa-trash"></i> Silinmiş Şagirdlər
+            </button>
+        </div>
+
+        <!-- ✅ AKTIV ŞAGIRDLƏR -->
+        <div id="activeTab" class="table-container">
+            <div id="activeLoading" class="loading">
+                <i class="fas fa-spinner fa-spin"></i>
+                <p>Yüklənir...</p>
+            </div>
+            <div id="activeContent" style="display: none;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="col-no">№</th>
+                            <th class="col-name">Ad Soyad</th>
+                            <th class="col-class">Sinif</th>
+                            <th class="col-email">Email</th>
+                            <th class="col-phone">Telefon</th>
+                            <th class="col-balance">Balans</th>
+                            <th class="col-actions">Əməliyyatlar</th>
+                        </tr>
+                    </thead>
+                    <tbody id="activeTableBody">
+                        <!-- Data buraya yüklənəcək -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- ✅ SİLİNMİŞ ŞAGIRDLƏR -->
+        <div id="deletedTab" class="table-container" style="display: none;">
+            <div id="deletedLoading" class="loading">
+                <i class="fas fa-spinner fa-spin"></i>
+                <p>Yüklənir...</p>
+            </div>
+            <div id="deletedContent" style="display: none;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="col-no">№</th>
+                            <th class="col-name">Ad Soyad</th>
+                            <th class="col-class">Sinif</th>
+                            <th class="col-email">Email</th>
+                            <th class="col-phone">Telefon</th>
+                            <th class="col-balance">Balans</th>
+                            <th class="col-actions">Əməliyyatlar</th>
+                        </tr>
+                    </thead>
+                    <tbody id="deletedTableBody">
+                        <!-- Data buraya yüklənəcək -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+
+    <script>
+        // Firebase konfiqurasiyası
+        const firebaseConfig = {
+            apiKey: "AIzaSyDE05ufg0FhPIAecIJ_ehr9yIFQKxIwncA",
+            authDomain: "bekrinschool.firebaseapp.com",
+            projectId: "bekrinschool",
+            storageBucket: "bekrinschool.firebasestorage.app",
+            messagingSenderId: "678081137706",
+            appId: "1:678081137706:web:75601b998dde21f25f0753"
+        };
+
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        let currentTeacher = null;
+        let activeStudents = [];
+        let deletedStudents = [];
+
+        // Auth yoxlama
+        auth.onAuthStateChanged(async (user) => {
+            if (!user) {
+                window.location.href = 'index.html';
+                return;
+            }
+
+            try {
+                const userDoc = await db.collection('users').doc(user.email).get();
+                
+                if (!userDoc.exists || userDoc.data().role !== 'teacher') {
+                    alert('Bu səhifəyə yalnız müəllimlər daxil ola bilər!');
+                    await auth.signOut();
+                    window.location.href = 'index.html';
+                    return;
+                }
+
+                currentTeacher = user;
+                loadStudents();
+            } catch (error) {
+                console.error('Xəta:', error);
+                alert('Xəta: ' + error.message);
+            }
+        });
+
+        // ✅ TAB SWITCH
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+
+            if (tab === 'active') {
+                document.getElementById('activeTab').style.display = 'block';
+                document.getElementById('deletedTab').style.display = 'none';
+            } else {
+                document.getElementById('activeTab').style.display = 'none';
+                document.getElementById('deletedTab').style.display = 'block';
+            }
+        }
+
+        // ✅ ŞAGIRDLƏRI YÜKLƏ
+        async function loadStudents() {
+            try {
+                const snapshot = await db.collection('students')
+                    .where('createdBy', '==', currentTeacher.email)
+                    .get();
+
+                activeStudents = [];
+                deletedStudents = [];
+
+                snapshot.forEach(doc => {
+                    const student = { id: doc.id, ...doc.data() };
+                    if (student.status === 'deleted') {
+                        deletedStudents.push(student);
+                    } else {
+                        activeStudents.push(student);
+                    }
+                });
+
+                displayActiveStudents();
+                displayDeletedStudents();
+
+            } catch (error) {
+                console.error('Yükləmə xətası:', error);
+                alert('Xəta: ' + error.message);
+            }
+        }
+
+        // ✅ AKTİV ŞAGIRDLƏRI GÖSTƏR
+        function displayActiveStudents() {
+            const tbody = document.getElementById('activeTableBody');
+            const loading = document.getElementById('activeLoading');
+            const content = document.getElementById('activeContent');
+
+            loading.style.display = 'none';
+            content.style.display = 'block';
+
+            if (activeStudents.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="7">
+                            <div class="empty-state">
+                                <i class="fas fa-user-slash"></i>
+                                <p>Heç bir şagird tapılmadı</p>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            tbody.innerHTML = activeStudents.map((student, index) => `
+                <tr>
+                    <td class="col-no">${index + 1}</td>
+                    <td class="col-name">${student.fullName || '-'}</td>
+                    <td class="col-class">${student.class || student.grade || '-'}</td>
+                    <td class="col-email">${student.email}</td>
+                    <td class="col-phone">${student.phone || '-'}</td>
+                    <td class="col-balance">${student.balance || 0} AZN</td>
+                    <td class="col-actions">
+                        <div class="action-buttons">
+                            <button class="btn btn-edit" onclick="editStudent('${student.id}')">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            <button class="btn btn-delete" onclick="deleteStudent('${student.id}')">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        // ✅ SİLİNMİŞ ŞAGIRDLƏRI GÖSTƏR
+        function displayDeletedStudents() {
+            const tbody = document.getElementById('deletedTableBody');
+            const loading = document.getElementById('deletedLoading');
+            const content = document.getElementById('deletedContent');
+
+            loading.style.display = 'none';
+            content.style.display = 'block';
+
+            if (deletedStudents.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="7">
+                            <div class="empty-state">
+                                <i class="fas fa-check-circle"></i>
+                                <p>Silinmiş şagird yoxdur</p>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            tbody.innerHTML = deletedStudents.map((student, index) => `
+                <tr style="opacity: 0.6;">
+                    <td class="col-no">${index + 1}</td>
+                    <td class="col-name">${student.fullName || '-'}</td>
+                    <td class="col-class">${student.class || student.grade || '-'}</td>
+                    <td class="col-email">${student.email}</td>
+                    <td class="col-phone">${student.phone || '-'}</td>
+                    <td class="col-balance">${student.balance || 0} AZN</td>
+                    <td class="col-actions">
+                        <button class="btn btn-delete" onclick="hardDeleteStudent('${student.id}')">
+                            <i class="fas fa-trash-alt"></i> Həmişəlik Sil
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        // ✅ SOFT DELETE (status: "deleted")
+        async function deleteStudent(studentId) {
+            if (!confirm("Bu şagirdi silmək istədiyinizə əminsiniz?")) return;
+
+            try {
+                await db.collection("students").doc(studentId).update({
+                    status: "deleted",
+                    deletedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                });
+
+                // Qruplardan çıxart
+                const groupsSnapshot = await db.collection('groups')
+                    .where('students', 'array-contains', studentId)
+                    .get();
+
+                const batch = db.batch();
+                groupsSnapshot.forEach(doc => {
+                    batch.update(doc.ref, {
+                        students: firebase.firestore.FieldValue.arrayRemove(studentId)
+                    });
+                });
+                await batch.commit();
+
+                alert("✅ Şagird silindi!");
+                loadStudents();
+            } catch (error) {
+                console.error("Xəta:", error);
+                alert("❌ Xəta: " + error.message);
+            }
+        }
+
+        // ✅ HARD DELETE (həmişəlik sil)
+        async function hardDeleteStudent(studentId) {
+            if (!confirm("⚠️ DİQQƏT!\n\nBu şagird VERİTABANINDAN TAMAMILƏ SİLİNƏCƏK!\n\nBu əməliyyatı geri qaytarmaq MÜMKÜN DEYİL!\n\nDavam etmək istəyirsiniz?")) return;
+
+            try {
+                // 1) Firestore-dan sil
+                await db.collection("students").doc(studentId).delete();
+
+                // 2) Auth istifadəçisini sil (əgər mümkünsə - admin SDK lazımdır)
+                // Bu hissə backend-dən edilməlidir
+
+                alert("✅ Şagird həmişəlik silindi!");
+                loadStudents();
+            } catch (error) {
+                console.error("Xəta:", error);
+                alert("❌ Xəta: " + error.message);
+            }
+        }
+
+        // ✅ PLACEHOLDER FUNKSİYALAR
+        function addStudent() {
+            // Modal və ya yeni səhifə açılacaq
+            alert('Şagird əlavə funksiyası əlavə ediləcək');
+        }
+
+        // ✅ ŞAGIRD REDAKTƏ ET (MODAL İLƏ)
+        function editStudent(studentId) {
+            const student = activeStudents.find(s => s.id === studentId);
+            if (!student) {
+                alert('❌ Şagird tapılmadı!');
+                return;
+            }
+            
+            // Modal HTML-i yarat
+            const modalHTML = `
+                <div class="modal active" id="editModal" onclick="closeEditModalOnOutside(event)">
+                    <div class="modal-content" onclick="event.stopPropagation()">
+                        <h2>
+                            <i class="fas fa-user-edit"></i> 
+                            Şagird Redaktə Et
+                        </h2>
+                        <form id="editForm">
+                            <div class="form-group">
+                                <label>Ad Soyad *</label>
+                                <input type="text" id="editName" value="${student.fullName || ''}" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Sinif</label>
+                                <input type="text" id="editClass" value="${student.class || student.grade || ''}" placeholder="Məsələn: 10">
+                            </div>
+                            <div class="form-group">
+                                <label>Telefon</label>
+                                <input type="tel" id="editPhone" value="${student.phone || ''}" placeholder="+994 XX XXX XX XX">
+                            </div>
+                            <div class="form-group">
+                                <label>Balans (AZN)</label>
+                                <input type="number" id="editBalance" value="${student.balance || 0}" step="0.01">
+                            </div>
+                            <div class="modal-buttons">
+                                <button type="button" class="btn btn-cancel" onclick="closeEditModal()">
+                                    <i class="fas fa-times"></i> Ləğv et
+                                </button>
+                                <button type="submit" class="btn btn-save">
+                                    <i class="fas fa-save"></i> Yadda saxla
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            `;
+            
+            // Modalı səhifəyə əlavə et
+            document.body.insertAdjacentHTML('beforeend', modalHTML);
+            
+            // Form submit hadisəsi
+            document.getElementById('editForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                await updateStudent(studentId);
+            });
+        }
+
+        // ✅ MODALDAN KƏNARA TIKLANANDA BAĞLA
+        function closeEditModalOnOutside(event) {
+            if (event.target.id === 'editModal') {
+                closeEditModal();
+            }
+        }
+
+        // ✅ MODALI BAĞLA
+        function closeEditModal() {
+            const modal = document.getElementById('editModal');
+            if (modal) {
+                modal.classList.remove('active');
+                setTimeout(() => modal.remove(), 300);
+            }
+        }
+
+        // ✅ ŞAGIRD MƏLUMATLARINI YENILƏ
+        async function updateStudent(studentId) {
+            try {
+                const updatedData = {
+                    fullName: document.getElementById('editName').value.trim(),
+                    class: document.getElementById('editClass').value.trim(),
+                    phone: document.getElementById('editPhone').value.trim(),
+                    balance: parseFloat(document.getElementById('editBalance').value) || 0,
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                };
+
+                // Validation
+                if (!updatedData.fullName) {
+                    alert('⚠️ Ad Soyad boş ola bilməz!');
+                    return;
+                }
+
+                console.log('🔄 Şagird yenilənir...', studentId);
+
+                await db.collection('students').doc(studentId).update(updatedData);
+                
+                console.log('✅ Şagird yeniləndi!');
+                alert('✅ Şagird uğurla yeniləndi!');
+                
+                closeEditModal();
+                loadStudents();
+
+            } catch (error) {
+                console.error('❌ Yeniləmə xətası:', error);
+                alert('❌ Xəta baş verdi: ' + error.message);
+            }
+        }
+
+        // ✅ ESC ilə modal bağlama
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeEditModal();
+            }
+        });
+
+
+
+    </script>
+</body>
+</html>

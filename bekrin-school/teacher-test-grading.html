@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Qiymətləndirmə - Bekrin School</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        /* Başlıq */
+        .header {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            color: #333;
+            font-size: 28px;
+        }
+
+        .header p {
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .back-btn {
+            padding: 10px 20px;
+            background: white;
+            color: #667eea;
+            border: 2px solid #667eea;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .back-btn:hover {
+            background: #667eea;
+            color: white;
+        }
+
+        /* Filtrlər */
+        .filters {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 20px;
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .filters select {
+            flex: 1;
+            min-width: 200px;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .filters select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        /* Pending Siyahısı */
+        .pending-list {
+            display: grid;
+            gap: 20px;
+        }
+
+        .pending-card {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            border-left: 5px solid #ff9800;
+        }
+
+        .pending-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 15px;
+        }
+
+        .test-info h3 {
+            color: #333;
+            font-size: 20px;
+            margin-bottom: 5px;
+        }
+
+        .test-badge {
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .badge-quiz {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+
+        .badge-sinaq {
+            background: #fff3e0;
+            color: #f57c00;
+        }
+
+        .badge-pending {
+            background: #fff3e0;
+            color: #ff9800;
+        }
+
+        .student-info {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+
+        .info-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            color: #666;
+        }
+
+        .auto-score {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .auto-score .label {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .auto-score .score {
+            font-size: 20px;
+            font-weight: bold;
+            color: #4caf50;
+        }
+
+        .grade-btn {
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .grade-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            z-index: 1000;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .modal.active {
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            width: 100%;
+            max-width: 900px;
+            margin: 50px auto;
+            position: relative;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .modal-header h2 {
+            color: #333;
+            font-size: 24px;
+        }
+
+        .close-modal {
+            background: none;
+            border: none;
+            font-size: 30px;
+            cursor: pointer;
+            color: #999;
+        }
+
+        .close-modal:hover {
+            color: #333;
+        }
+
+        /* Auto Skor Xülasəsi */
+        .auto-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .summary-item {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .summary-item .label {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+
+        .summary-item .value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #4caf50;
+        }
+
+        /* Yazı İşləri */
+        .writing-section {
+            margin-bottom: 30px;
+        }
+
+        .writing-section h3 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 20px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .writing-question {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            border-left: 4px solid #667eea;
+        }
+
+        .writing-question h4 {
+            color: #333;
+            margin-bottom: 15px;
+        }
+
+        .canvas-display {
+            background: white;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            overflow: hidden;
+        }
+
+        .canvas-display img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        .canvas-placeholder {
+            padding: 40px;
+            text-align: center;
+            color: #999;
+        }
+
+        .score-selector {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .score-option {
+            flex: 1;
+            min-width: 80px;
+            padding: 12px;
+            background: white;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 600;
+        }
+
+        .score-option:hover {
+            border-color: #667eea;
+            background: #f5f7ff;
+        }
+
+        .score-option.selected {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-color: #667eea;
+        }
+
+        /* Final Skor */
+        .final-score {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .final-score .label {
+            font-size: 16px;
+            margin-bottom: 10px;
+        }
+
+        .final-score .value {
+            font-size: 36px;
+            font-weight: bold;
+        }
+
+        /* Düymələr */
+        .modal-actions {
+            display: flex;
+            gap: 15px;
+            justify-content: flex-end;
+        }
+
+        .btn {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: white;
+            color: #667eea;
+            border: 2px solid #667eea;
+        }
+
+        .btn-secondary:hover {
+            background: #667eea;
+            color: white;
+        }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 50px;
+            color: white;
+            font-size: 18px;
+        }
+
+        /* Empty State */
+        .empty-state {
+            background: white;
+            padding: 60px;
+            border-radius: 15px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .empty-state .icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+
+        .empty-state h3 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .empty-state p {
+            color: #999;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .header {
+                flex-direction: column;
+                text-align: center;
+                gap: 15px;
+            }
+
+            .filters {
+                flex-direction: column;
+            }
+
+            .auto-summary {
+                grid-template-columns: 1fr;
+            }
+
+            .score-selector {
+                flex-direction: column;
+            }
+
+            .modal-actions {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="loadingScreen" class="loading">
+            <h2>Yüklənir...</h2>
+        </div>
+
+        <div id="mainContent" style="display: none;">
+            <!-- Başlıq -->
+            <div class="header">
+                <div>
+                    <h1>📝 Test Qiymətləndirmə</h1>
+                    <p>Şagirdlərin yazı işlərini qiymətləndirin</p>
+                </div>
+                <a href="teacher-tests.html" class="back-btn">⬅️ Geri</a>
+            </div>
+
+            <!-- Filtrlər -->
+            <div class="filters">
+                <select id="testFilter">
+                    <option value="">Bütün testlər</option>
+                </select>
+                <select id="groupFilter">
+                    <option value="">Bütün qruplar</option>
+                </select>
+            </div>
+
+            <!-- Pending Siyahısı -->
+            <div id="pendingList" class="pending-list">
+                <!-- JavaScript ilə doldurulacaq -->
+            </div>
+
+            <!-- Empty State -->
+            <div id="emptyState" class="empty-state" style="display: none;">
+                <div class="icon">✅</div>
+                <h3>Qiymətləndirilməyi gözləyən test yoxdur</h3>
+                <p>Bütün testlər qiymətləndirilib və nəticələr şagirdlərə göndərilib</p>
+            </div>
+        </div>
+
+        <!-- Qiymətləndirmə Modal -->
+        <div id="gradingModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="modalTitle">Qiymətləndirmə</h2>
+                    <button class="close-modal" onclick="closeModal()">&times;</button>
+                </div>
+
+                <!-- Auto Skor Xülasəsi -->
+                <div class="auto-summary">
+                    <div class="summary-item">
+                        <div class="label">Qapalı Suallar</div>
+                        <div class="value" id="closedScore">--</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="label">Açıq Suallar</div>
+                        <div class="value" id="openScore">--</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="label">Avtomatik Cəmi</div>
+                        <div class="value" id="autoTotal">--</div>
+                    </div>
+                </div>
+
+                <!-- Yazı İşləri -->
+                <div class="writing-section">
+                    <h3>✍️ Yazı İşləri</h3>
+                    <div id="writingQuestions">
+                        <!-- JavaScript ilə doldurulacaq -->
+                    </div>
+                </div>
+
+                <!-- Final Skor -->
+                <div class="final-score">
+                    <div class="label">Yekun Bal</div>
+                    <div class="value" id="finalScore">-- / 100</div>
+                </div>
+
+                <!-- Düymələr -->
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" onclick="closeModal()">İmtina</button>
+                    <button class="btn btn-primary" onclick="submitGrading()">✅ Təsdiq et və Göndər</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    
+    <script src="teacher-test-grading.js"></script>
+</body>
+</html>

@@ -1,0 +1,1729 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useDebounce } from "@/lib/useDebounce";
+import {
+  teacherApi,
+  Test,
+  TestResult,
+  ExamListItem,
+  ExamDetail,
+  ExamAttempt,
+  ExamAttemptDetail,
+} from "@/lib/teacher";
+import { Loading } from "@/components/Loading";
+import { Modal } from "@/components/Modal";
+import { useForm } from "react-hook-form";
+import { z } from "zod";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { Plus, Trash2, Clock, CheckCircle2, Eye, Check, X, StopCircle, RotateCcw, Archive, AlertCircle } from "lucide-react";
+
+type TabType = "bank" | "active" | "grading" | "archive";
+type ArchiveSubTab = "exams" | "questions" | "topics" | "pdfs" | "codingTopics" | "codingTasks" | "payments" | "groups" | "students";
+
+const testSchema = z.object({
+  type: z.enum(["quiz", "exam"]),
+  title: z.string().min(1, "Başlıq tələb olunur"),
+});
+
+const resultSchema = z.object({
+  studentProfileId: z.number().min(1, "Şagird seçilməlidir"),
+  groupId: z.number().optional(),
+  testName: z.string().min(1, "Test adı tələb olunur"),
+  maxScore: z.number().min(1, "Maksimum xal tələb olunur"),
+  score: z.number().min(0, "Xal 0-dan kiçik ola bilməz"),
+  date: z.string().min(1, "Tarix tələb olunur"),
+});
+
+const examSchema = z.object({
+  title: z.string().min(1, "Başlıq tələb olunur"),
+  type: z.enum(["quiz", "exam"]),
+  status: z.enum(["draft", "active"]),
+  start_time: z.string().min(1, "Başlanğıc tələb olunur"),
+  end_time: z.string().min(1, "Bitmə tələb olunur"),
+});
+
+type TestFormValues = z.infer<typeof testSchema>;
+type ResultFormValues = z.infer<typeof resultSchema>;
+type ExamFormValues = z.infer<typeof examSchema>;
+
+export default function TestsPage() {
+  const searchParams = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const [activeTab, setActiveTab] = useState<TabType>(
+    tabParam === "archive" || tabParam === "bank" || tabParam === "active" || tabParam === "grading" ? tabParam : "bank"
+  );
+  useEffect(() => {
+    if (tabParam === "archive" || tabParam === "bank" || tabParam === "active" || tabParam === "grading") {
+      setActiveTab(tabParam);
+    }
+  }, [tabParam]);
+  const [showCreateTest, setShowCreateTest] = useState(false);
+  const [showCreateResult, setShowCreateResult] = useState(false);
+  const [showCreateExam, setShowCreateExam] = useState(false);
+  const [showAddQuestions, setShowAddQuestions] = useState(false);
+  const [selectedExamId, setSelectedExamId] = useState<number | null>(null);
+  const [examTopicFilter, setExamTopicFilter] = useState("");
+  const [gradingExamId, setGradingExamId] = useState<number | null>(null);
+  const [gradingGroupId, setGradingGroupId] = useState<string>("");
+  const [gradingStatus, setGradingStatus] = useState<string>("");
+  const [selectedAttemptId, setSelectedAttemptId] = useState<number | null>(null);
+  const [showGradingModal, setShowGradingModal] = useState(false);
+  const [manualScores, setManualScores] = useState<Record<string, number>>({});
+  const [canvasPreviewUrl, setCanvasPreviewUrl] = useState<string | null>(null);
+  const [showExamSettings, setShowExamSettings] = useState(false);
+  const [examDuration, setExamDuration] = useState<number>(60);
+  const [selectedGroupIds, setSelectedGroupIds] = useState<number[]>([]);
+  const [selectedStudentId, setSelectedStudentId] = useState<number | null>(null);
+  const [assignMode, setAssignMode] = useState<"groups" | "student">("groups");
+  const [archiveSubTab, setArchiveSubTab] = useState<ArchiveSubTab>("exams");
+  const [archiveSearch, setArchiveSearch] = useState("");
+  const [showHardDeleteModal, setShowHardDeleteModal] = useState<{ type: string; id: number; name: string } | null>(null);
+  const [hardDeleteStep, setHardDeleteStep] = useState<1 | 2>(1);
+  const [hardDeleteConfirm, setHardDeleteConfirm] = useState(false);
+  const [hardDeleteTyped, setHardDeleteTyped] = useState("");
+  const [gradingShowArchived, setGradingShowArchived] = useState(false);
+  const [showCreateRunModal, setShowCreateRunModal] = useState(false);
+  const [createRunGroupId, setCreateRunGroupId] = useState<number | null>(null);
+  const [createRunStudentId, setCreateRunStudentId] = useState<number | null>(null);
+  const [createRunStartNow, setCreateRunStartNow] = useState(true);
+  const queryClient = useQueryClient();
+  const debouncedArchiveSearch = useDebounce(archiveSearch, 300);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["teacher", "tests"],
+    queryFn: () => teacherApi.getTests(),
+  });
+  const { data: exams = [], isLoading: examsLoading } = useQuery({
+    queryKey: ["teacher", "exams"],
+    queryFn: () => teacherApi.getExams(),
+  });
+
+  const now = new Date();
+  const activeExams = (exams as ExamListItem[]).filter((ex) => ex.status === "active");
+  const { data: examDetail, isLoading: examDetailLoading } = useQuery({
+    queryKey: ["teacher", "exam", selectedExamId],
+    queryFn: () => teacherApi.getExamDetail(selectedExamId!),
+    enabled: selectedExamId != null,
+  });
+  const { data: topics = [] } = useQuery({
+    queryKey: ["teacher", "question-topics"],
+    queryFn: () => teacherApi.getQuestionTopics(),
+  });
+  const { data: questionsForExam = [] } = useQuery({
+    queryKey: ["teacher", "questions", examTopicFilter],
+    queryFn: () => teacherApi.getQuestions(examTopicFilter ? { topic: examTopicFilter } : undefined),
+    enabled: showAddQuestions,
+  });
+
+  const { data: students } = useQuery({
+    queryKey: ["teacher", "students", "active"],
+    queryFn: () => teacherApi.getStudents("active"),
+  });
+  const { data: groups } = useQuery({
+    queryKey: ["teacher", "groups"],
+    queryFn: () => teacherApi.getGroups(),
+    staleTime: 60 * 1000, // Cache groups for 1 minute
+  });
+  const { data: attemptsData, isLoading: attemptsLoading } = useQuery({
+    queryKey: ["teacher", "exam-attempts", gradingExamId, gradingGroupId, gradingStatus, gradingShowArchived],
+    queryFn: () => teacherApi.getExamAttempts(gradingExamId!, { groupId: gradingGroupId || undefined, status: gradingStatus || undefined, showArchived: gradingShowArchived }),
+    enabled: gradingExamId != null && activeTab === "grading",
+    refetchInterval: 10000, // Real-time polling 10s
+  });
+  const { data: archiveExamsData } = useQuery({
+    queryKey: ["teacher", "archive", "exams", debouncedArchiveSearch],
+    queryFn: () => teacherApi.getArchiveExams({ q: debouncedArchiveSearch || undefined }),
+    enabled: activeTab === "archive" && archiveSubTab === "exams",
+  });
+  const { data: archiveQuestionsData } = useQuery({
+    queryKey: ["teacher", "archive", "questions", debouncedArchiveSearch],
+    queryFn: () => teacherApi.getArchiveQuestions({ q: debouncedArchiveSearch || undefined }),
+    enabled: activeTab === "archive" && archiveSubTab === "questions",
+  });
+  const { data: archiveTopicsData } = useQuery({
+    queryKey: ["teacher", "archive", "question-topics", debouncedArchiveSearch],
+    queryFn: () => teacherApi.getArchiveQuestionTopics({ q: debouncedArchiveSearch || undefined }),
+    enabled: activeTab === "archive" && archiveSubTab === "topics",
+  });
+  const { data: archiveCodingTopicsData } = useQuery({
+    queryKey: ["teacher", "archive", "coding-topics", debouncedArchiveSearch],
+    queryFn: () => teacherApi.getArchiveCodingTopics({ q: debouncedArchiveSearch || undefined }),
+    enabled: activeTab === "archive" && archiveSubTab === "codingTopics",
+  });
+  const { data: archiveCodingTasksData } = useQuery({
+    queryKey: ["teacher", "archive", "coding-tasks", debouncedArchiveSearch],
+    queryFn: () => teacherApi.getArchiveCodingTasks({ q: debouncedArchiveSearch || undefined }),
+    enabled: activeTab === "archive" && archiveSubTab === "codingTasks",
+  });
+  const { data: archivePdfsData } = useQuery({
+    queryKey: ["teacher", "archive", "pdfs", debouncedArchiveSearch],
+    queryFn: () => teacherApi.getArchivePdfs({ q: debouncedArchiveSearch || undefined }),
+    enabled: activeTab === "archive" && archiveSubTab === "pdfs",
+  });
+  const { data: archivePaymentsData } = useQuery({
+    queryKey: ["teacher", "archive", "payments", debouncedArchiveSearch],
+    queryFn: () => teacherApi.getArchivePayments({ q: debouncedArchiveSearch || undefined }),
+    enabled: activeTab === "archive" && archiveSubTab === "payments",
+  });
+  const { data: archiveGroupsData } = useQuery({
+    queryKey: ["teacher", "archive", "groups", debouncedArchiveSearch],
+    queryFn: () => teacherApi.getArchiveGroups({ q: debouncedArchiveSearch || undefined }),
+    enabled: activeTab === "archive" && archiveSubTab === "groups",
+  });
+  const { data: archiveStudentsData } = useQuery({
+    queryKey: ["teacher", "archive", "students", debouncedArchiveSearch],
+    queryFn: () => teacherApi.getArchiveStudents({ q: debouncedArchiveSearch || undefined }),
+    enabled: activeTab === "archive" && archiveSubTab === "students",
+  });
+  const { data: attemptDetail, isLoading: attemptDetailLoading } = useQuery({
+    queryKey: ["teacher", "attempt-detail", selectedAttemptId],
+    queryFn: () => teacherApi.getAttemptDetail(selectedAttemptId!),
+    enabled: selectedAttemptId != null,
+  });
+
+  const createTestMutation = useMutation({
+    mutationFn: (data: Partial<Test>) => teacherApi.createTest(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["teacher", "tests"] });
+      setShowCreateTest(false);
+    },
+  });
+
+  const createResultMutation = useMutation({
+    mutationFn: (data: ResultFormValues) =>
+      teacherApi.createTestResult({
+        studentProfileId: data.studentProfileId,
+        groupId: data.groupId && data.groupId > 0 ? data.groupId : undefined,
+        testName: data.testName,
+        maxScore: data.maxScore,
+        score: data.score,
+        date: data.date,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["teacher", "tests"] });
+      setShowCreateResult(false);
+    },
+  });
+
+  const createExamMutation = useMutation({
+    mutationFn: (data: { title: string; type: "quiz" | "exam"; status: string; start_time: string; end_time: string }) =>
+      teacherApi.createExam(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["teacher", "exams"] });
+      setShowCreateExam(false);
+    },
+  });
+  const addExamQuestionMutation = useMutation({
+    mutationFn: ({ examId, questionId }: { examId: number; questionId: number }) =>
+      teacherApi.addExamQuestion(examId, questionId),
+    onSuccess: (_data, { examId }) => {
+      queryClient.invalidateQueries({ queryKey: ["teacher", "exam", examId] });
+    },
+  });
+  const removeExamQuestionMutation = useMutation({
+    mutationFn: ({ examId, questionId }: { examId: number; questionId: number }) =>
+      teacherApi.removeExamQuestion(examId, questionId),
+    onSuccess: () => {
+      if (selectedExamId) queryClient.invalidateQueries({ queryKey: ["teacher", "exam", selectedExamId] });
+    },
+  });
+  const gradeAttemptMutation = useMutation({
+    mutationFn: ({ attemptId, publish }: { attemptId: number; publish: boolean }) =>
+      teacherApi.gradeAttempt(attemptId, { manualScores, publish }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["teacher", "exam-attempts"] });
+      queryClient.invalidateQueries({ queryKey: ["teacher", "attempt-detail"] });
+      setShowGradingModal(false);
+      setManualScores({});
+      setSelectedAttemptId(null);
+    },
+  });
+  const publishAttemptMutation = useMutation({
+    mutationFn: ({ attemptId, publish }: { attemptId: number; publish: boolean }) =>
+      teacherApi.publishAttempt(attemptId, publish),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["teacher", "exam-attempts"] });
+    },
+  });
+  const createRunMutation = useMutation({
+    mutationFn: (examId: number) => {
+      const payload = {
+        duration_minutes: examDuration,
+        start_now: createRunStartNow,
+        groupId: createRunGroupId ?? undefined,
+        studentId: createRunStudentId ?? undefined,
+      };
+      return teacherApi.createExamRun(examId, payload);
+    },
+    onSuccess: (_, examId) => {
+      queryClient.invalidateQueries({ queryKey: ["teacher", "exam", examId] });
+      queryClient.invalidateQueries({ queryKey: ["teacher", "exams"] });
+      setShowCreateRunModal(false);
+      setCreateRunGroupId(null);
+      setCreateRunStudentId(null);
+    },
+  });
+  const startExamMutation = useMutation({
+    mutationFn: (examId: number) => {
+      const payload: { groupIds?: number[]; studentId?: number; durationMinutes: number } = {
+        durationMinutes: examDuration,
+      };
+      if (assignMode === "groups" && selectedGroupIds.length > 0) {
+        payload.groupIds = selectedGroupIds;
+      } else if (assignMode === "student" && selectedStudentId) {
+        payload.studentId = selectedStudentId;
+      } else {
+        throw new Error("Qrup və ya şagird seçin");
+      }
+      return teacherApi.startExamNow(examId, payload);
+    },
+    onSuccess: (_, examId) => {
+      queryClient.invalidateQueries({ queryKey: ["teacher", "exams"] });
+      queryClient.invalidateQueries({ queryKey: ["teacher", "exam", examId] });
+      setShowExamSettings(false);
+      setSelectedGroupIds([]);
+      setSelectedStudentId(null);
+    },
+  });
+  const stopExamMutation = useMutation({
+    mutationFn: (examId: number) => teacherApi.stopExam(examId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["teacher", "exams"] });
+    },
+  });
+  const hardDeleteMutation = useMutation({
+    mutationFn: async ({ type, id, force }: { type: string; id: number; force?: boolean }) => {
+      if (type === "exam") return teacherApi.hardDeleteExam(id, force);
+      if (type === "question") return teacherApi.hardDeleteQuestion(id);
+      if (type === "topic") return teacherApi.hardDeleteQuestionTopic(id);
+      if (type === "pdf") return teacherApi.hardDeletePdf(id);
+      if (type === "codingTopic") return teacherApi.hardDeleteCodingTopic(id);
+      if (type === "codingTask") return teacherApi.hardDeleteCodingTask(id);
+      throw new Error("Unknown type");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["teacher"] });
+      setShowHardDeleteModal(null);
+      setHardDeleteStep(1);
+      setHardDeleteConfirm(false);
+      setHardDeleteTyped("");
+    },
+    onError: (err: any) => {
+      if (err?.response?.status === 409 && err?.response?.data?.code === "HAS_ATTEMPTS") {
+        alert("İmtahanda cəhdlər var. Tam silmək mümkün deyil.");
+      }
+    },
+  });
+  const restartAttemptMutation = useMutation({
+    mutationFn: ({ attemptId, duration }: { attemptId: number; duration?: number }) =>
+      teacherApi.restartAttempt(attemptId, duration ?? 60),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["teacher", "exam-attempts"] });
+    },
+  });
+
+  const {
+    register: registerTest,
+    handleSubmit: handleSubmitTest,
+    formState: { errors: errorsTest },
+    reset: resetTest,
+  } = useForm<TestFormValues>({
+    resolver: zodResolver(testSchema),
+    defaultValues: { type: "quiz" },
+  });
+
+  const {
+    register: registerResult,
+    handleSubmit: handleSubmitResult,
+    formState: { errors: errorsResult },
+    reset: resetResult,
+  } = useForm<ResultFormValues>({
+    resolver: zodResolver(resultSchema),
+  });
+
+  const {
+    register: registerExam,
+    handleSubmit: handleSubmitExam,
+    formState: { errors: errorsExam },
+    reset: resetExam,
+  } = useForm<ExamFormValues>({
+    resolver: zodResolver(examSchema),
+    defaultValues: { type: "exam", status: "draft" },
+  });
+
+  const [addQuestionIds, setAddQuestionIds] = useState<number[]>([]);
+  const examQuestionIds = new Set((examDetail?.questions ?? []).map((q) => q.question));
+
+  if (isLoading) return <Loading />;
+
+  const tests: Test[] = data?.tests || [];
+  const results: TestResult[] = data?.results || [];
+
+  return (
+    <div className="page-container">
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-slate-900">Testlər</h1>
+        {activeTab === "bank" && (
+          <button
+            onClick={() => {
+              setShowCreateExam(true);
+              resetExam({
+                type: "exam",
+                status: "draft",
+                title: "",
+                start_time: "",
+                end_time: "",
+              });
+            }}
+            className="btn-primary"
+          >
+            <Plus className="w-4 h-4" />
+            Yeni imtahan
+          </button>
+        )}
+      </div>
+
+      {/* Tabs */}
+      <div className="mb-6 border-b border-slate-200">
+        <div className="flex gap-4">
+          <button
+            type="button"
+            onClick={() => setActiveTab("bank")}
+            className={`pb-3 px-1 font-medium transition-colors ${
+              activeTab === "bank"
+                ? "text-primary-600 border-b-2 border-primary-600"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            Test bankı
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("active")}
+            className={`pb-3 px-1 font-medium transition-colors ${
+              activeTab === "active"
+                ? "text-primary-600 border-b-2 border-primary-600"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            Aktiv testlər
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("grading")}
+            className={`pb-3 px-1 font-medium transition-colors ${
+              activeTab === "grading"
+                ? "text-primary-600 border-b-2 border-primary-600"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            Nəticələr / Yoxlama
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("archive")}
+            className={`pb-3 px-1 font-medium transition-colors ${
+              activeTab === "archive"
+                ? "text-primary-600 border-b-2 border-primary-600"
+                : "text-slate-600 hover:text-slate-900"
+            }`}
+          >
+            Arxiv
+          </button>
+        </div>
+      </div>
+
+      {/* Tab Content */}
+      {activeTab === "bank" && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="card">
+            <h2 className="text-lg font-semibold text-slate-900 mb-4">İmtahanlar</h2>
+            {examsLoading ? (
+              <p className="text-slate-500 py-4">Yüklənir...</p>
+            ) : (exams as ExamListItem[]).length > 0 ? (
+              <ul className="space-y-2">
+                {(exams as ExamListItem[]).map((ex) => (
+                  <li
+                    key={ex.id}
+                    className={`flex items-center justify-between py-2 px-2 rounded border cursor-pointer ${
+                      selectedExamId === ex.id ? "border-primary-500 bg-primary-50" : "border-slate-100"
+                    }`}
+                    onClick={() => setSelectedExamId(ex.id)}
+                  >
+                    <span className="font-medium text-slate-900">{ex.title}</span>
+                    <span className="text-xs text-slate-500">
+                      {ex.type === "quiz" ? "Quiz" : "İmtahan"} · {ex.status}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-slate-500 py-4">İmtahan tapılmadı</p>
+            )}
+          </div>
+          <div className="card">
+            {selectedExamId == null ? (
+              <p className="text-slate-500 py-4">İmtahan seçin</p>
+            ) : examDetailLoading ? (
+              <p className="text-slate-500 py-4">Yüklənir...</p>
+            ) : (
+              <>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-semibold text-slate-900">{examDetail?.title}</h3>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="btn-outline text-sm"
+                      onClick={() => {
+                        setAddQuestionIds([]);
+                        setExamTopicFilter("");
+                        setShowAddQuestions(true);
+                      }}
+                    >
+                      Sual əlavə et
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-outline text-sm text-amber-700 border-amber-200 hover:bg-amber-50 flex items-center gap-1"
+                      onClick={() => {
+                        if (confirm("İmtahanı arxivə göndərmək istədiyinizə əminsiniz?")) {
+                          teacherApi.deleteExam(selectedExamId!).then(() => {
+                            queryClient.invalidateQueries({ queryKey: ["teacher"] });
+                            setSelectedExamId(null);
+                          });
+                        }
+                      }}
+                    >
+                      <Archive className="w-4 h-4" />
+                      Arxivə göndər
+                    </button>
+                  </div>
+                </div>
+                
+                {/* Exam Status & Metadata */}
+                <div className="mb-4 space-y-2 border-b border-slate-200 pb-4">
+                  <div className="flex items-center gap-4 flex-wrap">
+                    <div>
+                      <span className="text-xs text-slate-500">Status:</span>
+                      <select
+                        className="input text-sm ml-2"
+                        value={examDetail?.status || "draft"}
+                        onChange={(e) => {
+                          if (selectedExamId && examDetail) {
+                            teacherApi.updateExam(selectedExamId, { status: e.target.value }).then(() => {
+                              queryClient.invalidateQueries({ queryKey: ["teacher", "exam", selectedExamId] });
+                              queryClient.invalidateQueries({ queryKey: ["teacher", "exams"] });
+                            });
+                          }
+                        }}
+                      >
+                        <option value="draft">Qaralama</option>
+                        <option value="active">Aktiv</option>
+                        <option value="finished">Bitmiş</option>
+                        <option value="archived">Arxiv</option>
+                      </select>
+                    </div>
+                    {examDetail?.duration_minutes && (
+                      <div>
+                        <span className="text-xs text-slate-500">Müddət:</span>
+                        <span className="text-sm font-medium ml-2">{examDetail.duration_minutes} dəq</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-sm text-slate-600">
+                    <div>
+                      <span className="text-xs text-slate-500">Başlanğıc:</span>{" "}
+                      {examDetail?.start_time ? new Date(examDetail.start_time).toLocaleString("az-AZ") : "-"}
+                    </div>
+                    <div>
+                      <span className="text-xs text-slate-500">Bitmə:</span>{" "}
+                      {examDetail?.end_time ? new Date(examDetail.end_time).toLocaleString("az-AZ") : "-"}
+                    </div>
+                  </div>
+                  {examDetail?.assigned_groups && examDetail.assigned_groups.length > 0 && (
+                    <div>
+                      <span className="text-xs text-slate-500">Qruplar:</span>{" "}
+                      <span className="text-sm">{examDetail.assigned_groups.map((g: any) => g.name).join(", ")}</span>
+                    </div>
+                  )}
+                  {examDetail?.questions && (
+                    <div className="space-y-1">
+                      <div>
+                        <span className="text-xs text-slate-500">Sual sayı:</span>{" "}
+                        <span className={`text-sm font-medium ${
+                          (examDetail.type === "quiz" && examDetail.questions.length === 15) ||
+                          (examDetail.type === "exam" && examDetail.questions.length === 30)
+                            ? "text-green-600" : "text-orange-600"
+                        }`}>
+                          {examDetail.questions.length} / {examDetail.type === "quiz" ? "15" : "30"}
+                        </span>
+                      </div>
+                      {examDetail.type === "quiz" && (() => {
+                        const closed = examDetail.questions.filter((q: any) => q.question_type === "MULTIPLE_CHOICE").length;
+                        const open = examDetail.questions.filter((q: any) => q.question_type.startsWith("OPEN")).length;
+                        return (
+                          <div className="flex flex-wrap gap-2 text-xs">
+                            <span className={closed === 12 ? "text-green-600 font-medium" : "text-red-600"}>Qapalı: {closed} / 12</span>
+                            <span className={open === 3 ? "text-green-600 font-medium" : "text-red-600"}>Açıq: {open} / 3</span>
+                          </div>
+                        );
+                      })()}
+                      {examDetail.type === "exam" && (() => {
+                        const closed = examDetail.questions.filter((q: any) => q.question_type === "MULTIPLE_CHOICE").length;
+                        const open = examDetail.questions.filter((q: any) => q.question_type.startsWith("OPEN")).length;
+                        const sit = examDetail.questions.filter((q: any) => q.question_type === "SITUATION").length;
+                        return (
+                          <div className="flex flex-wrap gap-2 text-xs">
+                            <span className={closed === 22 ? "text-green-600 font-medium" : "text-red-600"}>Qapalı: {closed} / 22</span>
+                            <span className={open === 5 ? "text-green-600 font-medium" : "text-red-600"}>Açıq: {open} / 5</span>
+                            <span className={sit === 3 ? "text-green-600 font-medium" : "text-red-600"}>Situasiya: {sit} / 3</span>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+                  {(examDetail as any)?.source_type && (
+                    <p className="text-xs text-slate-500 mt-1">
+                      Mənbə: {(examDetail as any).source_type === "BANK" ? "Hazır suallar" : (examDetail as any).source_type === "PDF" ? "PDF + Cavab açarı" : "JSON"}
+                    </p>
+                  )}
+                  {(examDetail as any)?.question_counts && (
+                    <div className="flex flex-wrap gap-2 text-xs mt-1">
+                      <span className="text-green-600 font-medium">Qapalı: {(examDetail as any).question_counts.closed}</span>
+                      <span className="text-green-600 font-medium">Açıq: {(examDetail as any).question_counts.open}</span>
+                      <span className="text-green-600 font-medium">Situasiya: {(examDetail as any).question_counts.situation}</span>
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    <button
+                      type="button"
+                      className="btn-outline text-sm"
+                      onClick={() => {
+                        if (examDetail?.assigned_groups) {
+                          setSelectedGroupIds(examDetail.assigned_groups.map((g: any) => g.id));
+                        }
+                        setExamDuration(examDetail?.duration_minutes || 60);
+                        setShowExamSettings(true);
+                      }}
+                    >
+                      Qruplar təyin et / Başlat
+                    </button>
+                  </div>
+                  {(examDetail as any)?.runs != null && (
+                    <div className="mt-4 pt-4 border-t border-slate-200">
+                      <h4 className="text-sm font-medium text-slate-700 mb-2">Runlar</h4>
+                      <ul className="space-y-2 mb-2">
+                        {(examDetail as any).runs.slice(0, 5).map((r: any) => (
+                          <li key={r.id} className="text-sm flex items-center justify-between">
+                            <span>{r.group_name || r.student_name || "—"} • {r.status} • {r.attempt_count ?? 0} cəhd</span>
+                            <button
+                              type="button"
+                              className="text-blue-600 hover:underline text-xs"
+                              onClick={() => { setGradingExamId(selectedExamId ?? null); setActiveTab("grading"); }}
+                            >
+                              Nəticələr
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                      <button
+                        type="button"
+                        className="btn-outline text-sm"
+                        onClick={() => { setExamDuration(examDetail?.duration_minutes || 60); setShowCreateRunModal(true); }}
+                      >
+                        Yeni run yarat
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {examDetail?.questions && examDetail.questions.length > 0 ? (
+                  <ul className="space-y-2">
+                    {examDetail.questions.map((eq) => (
+                      <li
+                        key={eq.id}
+                        className="flex items-center justify-between py-2 border-b border-slate-100"
+                      >
+                        <span className="text-sm text-slate-800 truncate flex-1">{eq.question_text}</span>
+                        <button
+                          type="button"
+                          className="text-red-600 hover:bg-red-50 p-1 rounded"
+                          onClick={() =>
+                            removeExamQuestionMutation.mutate({ examId: selectedExamId, questionId: eq.question })
+                          }
+                          disabled={removeExamQuestionMutation.isPending}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-slate-500 py-4">Bu imtahanda hələ sual yoxdur. &quot;Sual əlavə et&quot; ilə əlavə edin.</p>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === "active" && (
+        <div className="card">
+          <h2 className="text-lg font-semibold text-slate-900 mb-4">Aktiv testlər</h2>
+          {examsLoading ? (
+            <p className="text-slate-500 py-4">Yüklənir...</p>
+          ) : activeExams.length > 0 ? (
+            <div className="space-y-4">
+              {activeExams.map((ex) => {
+                const end = new Date(ex.end_time);
+                const remaining = Math.max(0, Math.floor((end.getTime() - now.getTime()) / (1000 * 60)));
+                const isGhost = !!ex.is_ghost;
+                return (
+                  <div key={ex.id} className={`border rounded-lg p-4 ${isGhost ? "border-amber-300 bg-amber-50" : "border-slate-200"}`}>
+                    {isGhost && (
+                      <p className="text-sm text-amber-700 mb-2 flex items-center gap-1">
+                        <AlertCircle className="w-4 h-4 shrink-0" />
+                        Müddət və ya təyinat olmadığı üçün idarə olunmur. Müəllim sahədən qrup təyin edib &quot;İndi başlat&quot; edin.
+                      </p>
+                    )}
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="font-semibold text-slate-900">{ex.title}</h3>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-500 flex items-center gap-1">
+                          <Clock className="w-3 h-3" />
+                          {remaining > 0 ? `${remaining} dəq qalıb` : "Bitmiş"}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => { setActiveTab("grading"); setGradingExamId(ex.id); }}
+                            className="btn-outline text-sm flex items-center gap-1"
+                          >
+                            <Eye className="w-4 h-4" />
+                            Nəticələr
+                          </button>
+                          {!isGhost && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (confirm("İmtahanı dayandırmaq istədiyinizə əminsiniz?")) {
+                                  stopExamMutation.mutate(ex.id);
+                                }
+                              }}
+                              disabled={stopExamMutation.isPending}
+                              className="btn-outline text-sm flex items-center gap-1 text-amber-700 border-amber-200 hover:bg-amber-50"
+                            >
+                              <StopCircle className="w-4 h-4" />
+                              Dayandır
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-sm text-slate-600">
+                      {new Date(ex.start_time).toLocaleString("az-AZ")} – {new Date(ex.end_time).toLocaleString("az-AZ")}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-slate-500 py-4">Hazırda aktiv test yoxdur</p>
+          )}
+        </div>
+      )}
+
+      {activeTab === "grading" && (
+        <div className="space-y-6">
+          {/* Filters */}
+          <div className="card">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="label">İmtahan</label>
+                <select
+                  className="input w-full"
+                  value={gradingExamId || ""}
+                  onChange={(e) => setGradingExamId(e.target.value ? parseInt(e.target.value) : null)}
+                >
+                  <option value="">Hamısı</option>
+                  {(exams as ExamListItem[]).map((ex) => (
+                    <option key={ex.id} value={ex.id}>{ex.title}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">Qrup</label>
+                <select
+                  className="input w-full"
+                  value={gradingGroupId}
+                  onChange={(e) => setGradingGroupId(e.target.value)}
+                >
+                  <option value="">Hamısı</option>
+                  {groups?.map((g) => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">Status</label>
+                <select
+                  className="input w-full"
+                  value={gradingStatus}
+                  onChange={(e) => setGradingStatus(e.target.value)}
+                >
+                  <option value="">Hamısı</option>
+                  <option value="submitted">Təqdim edilmiş</option>
+                  <option value="waiting_manual">Manual gözləyir</option>
+                  <option value="graded">Qiymətləndirilmiş</option>
+                  <option value="published">Yayımlanmış</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Attempts List */}
+          <div className="card overflow-x-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+                Göndərişlər
+                {attemptsData?.attempts && attemptsData.attempts.some((a: ExamAttempt) => a.status === "SUBMITTED") && (
+                  <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full animate-pulse">Yeni submit</span>
+                )}
+              </h2>
+              <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={gradingShowArchived}
+                  onChange={(e) => setGradingShowArchived(e.target.checked)}
+                />
+                Köhnə attempt-lər
+              </label>
+            </div>
+            {attemptsLoading ? (
+              <p className="text-slate-500 py-4">Yüklənir...</p>
+            ) : !gradingExamId ? (
+              <p className="text-slate-500 py-4">İmtahan seçin</p>
+            ) : attemptsData?.attempts && attemptsData.attempts.length > 0 ? (
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-slate-200">
+                    <th className="text-left py-2 text-sm font-semibold text-slate-700">Şagird</th>
+                    <th className="text-left py-2 text-sm font-semibold text-slate-700">Qrup</th>
+                    <th className="text-left py-2 text-sm font-semibold text-slate-700">Cəhd</th>
+                    <th className="text-left py-2 text-sm font-semibold text-slate-700">Təqdim</th>
+                    <th className="text-left py-2 text-sm font-semibold text-slate-700">Avto</th>
+                    <th className="text-left py-2 text-sm font-semibold text-slate-700">Manual</th>
+                    <th className="text-left py-2 text-sm font-semibold text-slate-700">Cəmi</th>
+                    <th className="text-left py-2 text-sm font-semibold text-slate-700">Əməliyyat</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {attemptsData.attempts.map((a: ExamAttempt) => (
+                    <tr
+                      key={a.id}
+                      className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer"
+                      onClick={() => {
+                        setSelectedAttemptId(a.id);
+                        setShowGradingModal(true);
+                      }}
+                    >
+                      <td className="py-2 text-sm text-slate-900">{a.studentName}</td>
+                      <td className="py-2 text-sm text-slate-600">{a.groupName || "-"}</td>
+                      <td className="py-2 text-sm">
+                        <span
+                          className={
+                            a.status === "SUBMITTED"
+                              ? "text-green-600"
+                              : a.status === "EXPIRED"
+                                ? "text-amber-600"
+                                : "text-blue-600"
+                          }
+                        >
+                          {a.status === "SUBMITTED" ? "Təqdim" : a.status === "EXPIRED" ? "Vaxt bitdi" : "Davam edir"}
+                        </span>
+                      </td>
+                      <td className="py-2 text-sm text-slate-600">
+                        {(a.submittedAt ?? a.finishedAt) ? new Date(a.submittedAt ?? a.finishedAt!).toLocaleString("az-AZ") : "-"}
+                      </td>
+                      <td className="py-2 text-sm">{a.autoScore != null ? Number(a.autoScore).toFixed(1) : "-"}</td>
+                      <td className="py-2 text-sm">
+                        {a.manualPendingCount > 0 && (
+                          <span className="text-orange-600 font-medium">{a.manualPendingCount} gözləyir</span>
+                        )}
+                        {a.manualScore != null && <span>{Number(a.manualScore).toFixed(1)}</span>}
+                      </td>
+                      <td className="py-2 text-sm font-medium">
+                        {a.finalScore != null ? Number(a.finalScore).toFixed(1) : "-"} / {a.maxScore ?? "-"}
+                      </td>
+                      <td className="py-2 text-sm" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedAttemptId(a.id);
+                              setShowGradingModal(true);
+                            }}
+                            className="text-blue-600 hover:underline flex items-center gap-1"
+                          >
+                            <Eye className="w-4 h-4" />
+                            Bax
+                          </button>
+                          {(a.status === "EXPIRED" || a.status === "IN_PROGRESS") && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                restartAttemptMutation.mutate({ attemptId: a.id, duration: 60 })
+                              }
+                              disabled={restartAttemptMutation.isPending}
+                              className="text-amber-600 hover:underline flex items-center gap-1 text-xs"
+                              title="Şagird üçün yenidən başlat"
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                              Yenidən başlat
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="text-slate-500 py-4">Göndəriş tapılmadı</p>
+            )}
+          </div>
+
+          {/* Legacy Results */}
+          <div className="card overflow-x-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-slate-900">Köhnə Qiymət Nəticələri</h2>
+              <button
+                onClick={() => {
+                  setShowCreateResult(true);
+                  resetResult();
+                }}
+                className="btn-outline text-sm"
+              >
+                Qiymət Əlavə Et
+              </button>
+            </div>
+            {results.length > 0 ? (
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-slate-200">
+                    <th className="text-left py-2 text-sm font-semibold text-slate-700">Test</th>
+                    <th className="text-left py-2 text-sm font-semibold text-slate-700">Xal</th>
+                    <th className="text-left py-2 text-sm font-semibold text-slate-700">Tarix</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {results.map((r) => (
+                    <tr key={r.id} className="border-b border-slate-100">
+                      <td className="py-2 text-sm text-slate-900">{r.testName}</td>
+                      <td className="py-2 text-sm">
+                        {r.score} / {r.maxScore}
+                      </td>
+                      <td className="py-2 text-sm text-slate-600">
+                        {new Date(r.date).toLocaleDateString("az-AZ")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="text-slate-500 py-4">Nəticə tapılmadı</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === "archive" && (
+        <div className="space-y-6">
+          <div className="flex flex-wrap gap-2 mb-4">
+            {(["exams", "questions", "topics", "pdfs", "codingTopics", "codingTasks", "payments", "groups", "students"] as ArchiveSubTab[]).map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setArchiveSubTab(t)}
+                className={`px-3 py-1.5 rounded text-sm font-medium ${
+                  archiveSubTab === t ? "bg-primary-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                }`}
+              >
+                {t === "exams" ? "İmtahanlar" : t === "questions" ? "Suallar" : t === "topics" ? "Sual mövzuları" : t === "pdfs" ? "PDFs" : t === "codingTopics" ? "Kod mövzuları" : t === "codingTasks" ? "Kod tapşırıqları" : t === "payments" ? "Ödənişlər" : t === "groups" ? "Qruplar" : "Şagirdlər"}
+              </button>
+            ))}
+          </div>
+          <div className="mb-4">
+            <input
+              type="text"
+              className="input w-full max-w-md"
+              placeholder="Axtar…"
+              value={archiveSearch}
+              onChange={(e) => setArchiveSearch(e.target.value)}
+            />
+          </div>
+          <div className="card">
+            {archiveSubTab === "exams" && archiveExamsData?.items && archiveExamsData.items.length > 0 && (
+              <ul className="space-y-2">
+                {archiveExamsData.items.map((ex: ExamListItem & { attemptCount?: number }) => (
+                  <li key={ex.id} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
+                    <span className="font-medium text-slate-900">{ex.title} {ex.type === "quiz" ? "(Quiz)" : "(İmtahan)"} · {(ex as any).attemptCount ?? 0} cəhd</span>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => teacherApi.restoreExam(ex.id).then(() => queryClient.invalidateQueries({ queryKey: ["teacher"] }))} className="text-blue-600 hover:underline text-sm flex items-center gap-1"><RotateCcw className="w-4 h-4" /> Bərpa et</button>
+                      <button type="button" onClick={() => setShowHardDeleteModal({ type: "exam", id: ex.id, name: ex.title })} className="text-red-600 hover:underline text-sm">Tam sil</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {archiveSubTab === "questions" && archiveQuestionsData?.items && archiveQuestionsData.items.length > 0 && (
+              <ul className="space-y-2">
+                {archiveQuestionsData.items.map((q: any) => (
+                  <li key={q.id} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
+                    <span className="line-clamp-1 text-slate-900">{q.text}</span>
+                    <div className="flex gap-2 shrink-0">
+                      <button type="button" onClick={() => teacherApi.restoreQuestion(q.id).then(() => queryClient.invalidateQueries({ queryKey: ["teacher"] }))} className="text-blue-600 hover:underline text-sm">Bərpa et</button>
+                      <button type="button" onClick={() => setShowHardDeleteModal({ type: "question", id: q.id, name: q.text?.slice(0, 50) || `Sual ${q.id}` })} className="text-red-600 hover:underline text-sm">Tam sil</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {archiveSubTab === "topics" && archiveTopicsData?.items && archiveTopicsData.items.length > 0 && (
+              <ul className="space-y-2">
+                {archiveTopicsData.items.map((t: any) => (
+                  <li key={t.id} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
+                    <span className="font-medium text-slate-900">{t.name}</span>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => teacherApi.restoreQuestionTopic(t.id).then(() => queryClient.invalidateQueries({ queryKey: ["teacher"] }))} className="text-blue-600 hover:underline text-sm">Bərpa et</button>
+                      <button type="button" onClick={() => setShowHardDeleteModal({ type: "topic", id: t.id, name: t.name })} className="text-red-600 hover:underline text-sm">Tam sil</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {archiveSubTab === "pdfs" && archivePdfsData?.items && archivePdfsData.items.length > 0 && (
+              <ul className="space-y-2">
+                {archivePdfsData.items.map((p: any) => (
+                  <li key={p.id} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
+                    <span className="font-medium text-slate-900">{p.title}</span>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => teacherApi.restorePdf(p.id).then(() => queryClient.invalidateQueries({ queryKey: ["teacher"] }))} className="text-blue-600 hover:underline text-sm">Bərpa et</button>
+                      <button type="button" onClick={() => setShowHardDeleteModal({ type: "pdf", id: p.id, name: p.title })} className="text-red-600 hover:underline text-sm">Tam sil</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {archiveSubTab === "codingTopics" && archiveCodingTopicsData?.items && archiveCodingTopicsData.items.length > 0 && (
+              <ul className="space-y-2">
+                {archiveCodingTopicsData.items.map((t: { id: number; name: string }) => (
+                  <li key={t.id} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
+                    <span className="font-medium text-slate-900">{t.name}</span>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => teacherApi.restoreCodingTopic(t.id).then(() => queryClient.invalidateQueries({ queryKey: ["teacher"] }))} className="text-blue-600 hover:underline text-sm flex items-center gap-1"><RotateCcw className="w-3 h-3" /> Bərpa et</button>
+                      <button type="button" onClick={() => setShowHardDeleteModal({ type: "codingTopic", id: t.id, name: t.name })} className="text-red-600 hover:underline text-sm">Tam sil</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {archiveSubTab === "codingTasks" && archiveCodingTasksData?.items && archiveCodingTasksData.items.length > 0 && (
+              <ul className="space-y-2">
+                {archiveCodingTasksData.items.map((t) => {
+                  const tid = typeof t.id === "string" ? parseInt(t.id, 10) : t.id;
+                  return (
+                    <li key={tid} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
+                      <span className="font-medium text-slate-900">{t.title}</span>
+                      <div className="flex gap-2">
+                        <button type="button" onClick={() => teacherApi.restoreCodingTask(tid).then(() => queryClient.invalidateQueries({ queryKey: ["teacher"] }))} className="text-blue-600 hover:underline text-sm flex items-center gap-1"><RotateCcw className="w-3 h-3" /> Bərpa et</button>
+                        <button type="button" onClick={() => setShowHardDeleteModal({ type: "codingTask", id: tid, name: t.title })} className="text-red-600 hover:underline text-sm">Tam sil</button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            {archiveSubTab === "payments" && archivePaymentsData?.items && archivePaymentsData.items.length > 0 && (
+              <ul className="space-y-2">
+                {archivePaymentsData.items.map((p: any) => (
+                  <li key={p.id} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
+                    <span className="font-medium text-slate-900">{p.studentName} — {p.amount} AZN · {p.date}</span>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => teacherApi.restorePayment(p.id).then(() => queryClient.invalidateQueries({ queryKey: ["teacher"] }))} className="text-blue-600 hover:underline text-sm flex items-center gap-1"><RotateCcw className="w-4 h-4" /> Bərpa et</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {archiveSubTab === "groups" && archiveGroupsData?.items && archiveGroupsData.items.length > 0 && (
+              <ul className="space-y-2">
+                {archiveGroupsData.items.map((g: any) => (
+                  <li key={g.id} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
+                    <span className="font-medium text-slate-900">{g.name}</span>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => teacherApi.restoreGroup(g.id).then(() => queryClient.invalidateQueries({ queryKey: ["teacher"] }))} className="text-blue-600 hover:underline text-sm flex items-center gap-1"><RotateCcw className="w-4 h-4" /> Bərpa et</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {archiveSubTab === "students" && archiveStudentsData?.items && archiveStudentsData.items.length > 0 && (
+              <ul className="space-y-2">
+                {archiveStudentsData.items.map((s: any) => (
+                  <li key={s.id} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
+                    <span className="font-medium text-slate-900">{s.fullName}</span>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => teacherApi.restoreStudent(String(s.userId ?? s.id)).then(() => queryClient.invalidateQueries({ queryKey: ["teacher"] }))} className="text-blue-600 hover:underline text-sm flex items-center gap-1"><RotateCcw className="w-4 h-4" /> Bərpa et</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {((archiveSubTab === "exams" && (!archiveExamsData?.items || archiveExamsData.items.length === 0)) ||
+              (archiveSubTab === "questions" && (!archiveQuestionsData?.items || archiveQuestionsData.items.length === 0)) ||
+              (archiveSubTab === "topics" && (!archiveTopicsData?.items || archiveTopicsData.items.length === 0)) ||
+              (archiveSubTab === "pdfs" && (!archivePdfsData?.items || archivePdfsData.items.length === 0)) ||
+              (archiveSubTab === "codingTopics" && (!archiveCodingTopicsData?.items || archiveCodingTopicsData.items.length === 0)) ||
+              (archiveSubTab === "codingTasks" && (!archiveCodingTasksData?.items || archiveCodingTasksData.items.length === 0)) ||
+              (archiveSubTab === "payments" && (!archivePaymentsData?.items || archivePaymentsData.items.length === 0)) ||
+              (archiveSubTab === "groups" && (!archiveGroupsData?.items || archiveGroupsData.items.length === 0)) ||
+              (archiveSubTab === "students" && (!archiveStudentsData?.items || archiveStudentsData.items.length === 0))) && (
+              <p className="text-slate-500 py-8 text-center">Arxivdə element tapılmadı</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      <Modal
+        isOpen={showCreateTest}
+        onClose={() => setShowCreateTest(false)}
+        title="Yeni Test"
+      >
+        <form onSubmit={handleSubmitTest((v) => createTestMutation.mutate(v))} className="space-y-4">
+          <div>
+            <label className="label">Tip</label>
+            <select className="input" {...registerTest("type")}>
+              <option value="quiz">Quiz</option>
+              <option value="exam">İmtahan</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">Başlıq *</label>
+            <input className="input" {...registerTest("title")} />
+            {errorsTest.title && (
+              <p className="mt-1 text-xs text-red-600">{errorsTest.title.message}</p>
+            )}
+          </div>
+          <div className="flex gap-3 pt-4">
+            <button type="submit" className="btn-primary flex-1" disabled={createTestMutation.isPending}>
+              Yadda Saxla
+            </button>
+            <button type="button" onClick={() => setShowCreateTest(false)} className="btn-outline flex-1">
+              Ləğv et
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        isOpen={showCreateExam}
+        onClose={() => setShowCreateExam(false)}
+        title="Yeni imtahan"
+      >
+        <form
+          onSubmit={handleSubmitExam((v) =>
+            createExamMutation.mutate({
+              title: v.title,
+              type: v.type,
+              status: v.status,
+              start_time: v.start_time,
+              end_time: v.end_time,
+            })
+          )}
+          className="space-y-4"
+        >
+          <div>
+            <label className="label">Başlıq *</label>
+            <input className="input" {...registerExam("title")} />
+            {errorsExam.title && (
+              <p className="mt-1 text-xs text-red-600">{errorsExam.title.message}</p>
+            )}
+          </div>
+          <div>
+            <label className="label">Tip</label>
+            <select className="input" {...registerExam("type")}>
+              <option value="quiz">Quiz</option>
+              <option value="exam">İmtahan</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">Status</label>
+            <select className="input" {...registerExam("status")}>
+              <option value="draft">Qaralama</option>
+              <option value="active">Aktiv</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">Başlanğıc *</label>
+            <input type="datetime-local" className="input" {...registerExam("start_time")} />
+            {errorsExam.start_time && (
+              <p className="mt-1 text-xs text-red-600">{errorsExam.start_time.message}</p>
+            )}
+          </div>
+          <div>
+            <label className="label">Bitmə *</label>
+            <input type="datetime-local" className="input" {...registerExam("end_time")} />
+            {errorsExam.end_time && (
+              <p className="mt-1 text-xs text-red-600">{errorsExam.end_time.message}</p>
+            )}
+          </div>
+          <div className="flex gap-3 pt-4">
+            <button type="submit" className="btn-primary flex-1" disabled={createExamMutation.isPending}>
+              Yadda saxla
+            </button>
+            <button type="button" onClick={() => setShowCreateExam(false)} className="btn-outline flex-1">
+              Ləğv et
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        isOpen={showAddQuestions}
+        onClose={() => { setShowAddQuestions(false); setAddQuestionIds([]); setExamTopicFilter(""); }}
+        title="Sual əlavə et"
+        size="lg"
+      >
+        {selectedExamId != null && (
+          <>
+            <div className="mb-4">
+              <label className="label">Mövzu</label>
+              <select
+                className="input"
+                value={examTopicFilter}
+                onChange={(e) => setExamTopicFilter(e.target.value)}
+              >
+                <option value="">Hamısı</option>
+                {topics.map((t) => (
+                  <option key={t.id} value={String(t.id)}>{t.name}</option>
+                ))}
+              </select>
+            </div>
+            {(() => {
+              const isQuiz = examDetail?.type === "quiz";
+              const req = isQuiz ? { closed: 12, open: 3, situation: 0 } : { closed: 22, open: 5, situation: 3 };
+              const current = {
+                closed: (examDetail?.questions ?? []).filter((q: any) => q.question_type === "MULTIPLE_CHOICE").length,
+                open: (examDetail?.questions ?? []).filter((q: any) => (q.question_type || "").startsWith("OPEN")).length,
+                situation: (examDetail?.questions ?? []).filter((q: any) => q.question_type === "SITUATION").length,
+              };
+              const selectedQs = questionsForExam.filter((q) => addQuestionIds.includes(q.id));
+              const sel = {
+                closed: selectedQs.filter((q) => q.type === "MULTIPLE_CHOICE").length,
+                open: selectedQs.filter((q) => (q.type || "").startsWith("OPEN")).length,
+                situation: selectedQs.filter((q) => q.type === "SITUATION").length,
+              };
+              const after = { closed: current.closed + sel.closed, open: current.open + sel.open, situation: current.situation + sel.situation };
+              const valid = after.closed <= req.closed && after.open <= req.open && after.situation <= req.situation &&
+                (isQuiz ? after.closed + after.open + after.situation <= 15 : after.closed + after.open + after.situation <= 30);
+              return (
+                <>
+                  <div className="text-xs text-slate-600 mb-2">
+                    {isQuiz ? "Quiz: 12 qapalı + 3 açıq" : "İmtahan: 22 qapalı + 5 açıq + 3 situasiya"}. Əlavədən sonra: Qapalı {after.closed}/{req.closed}, Açıq {after.open}/{req.open}{!isQuiz ? `, Situasiya ${after.situation}/${req.situation}` : ""}
+                    {!valid && addQuestionIds.length > 0 && <span className="block text-red-600 mt-1">Sual sayı qaydalara uyğun deyil</span>}
+                  </div>
+                  <div className="max-h-64 overflow-y-auto space-y-2 mb-4">
+                    {questionsForExam
+                      .filter((q) => !examQuestionIds.has(q.id))
+                      .map((q) => (
+                        <label key={q.id} className="flex items-center gap-2 py-1 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={addQuestionIds.includes(q.id)}
+                            onChange={(e) =>
+                              setAddQuestionIds((prev) =>
+                                e.target.checked ? [...prev, q.id] : prev.filter((id) => id !== q.id)
+                              )
+                            }
+                          />
+                          <span className="text-sm text-slate-800 truncate flex-1">{q.text}</span>
+                          <span className="text-xs text-slate-500">{q.type}</span>
+                        </label>
+                      ))}
+                  </div>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      className="btn-primary flex-1"
+                      disabled={addQuestionIds.length === 0 || !valid || addExamQuestionMutation.isPending}
+                onClick={async () => {
+                  for (const questionId of addQuestionIds) {
+                    await addExamQuestionMutation.mutateAsync({ examId: selectedExamId, questionId });
+                  }
+                  setShowAddQuestions(false);
+                  setAddQuestionIds([]);
+                  setExamTopicFilter("");
+                  if (selectedExamId) queryClient.invalidateQueries({ queryKey: ["teacher", "exam", selectedExamId] });
+                }}
+              >
+                Seçilənləri əlavə et ({addQuestionIds.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => { setShowAddQuestions(false); setAddQuestionIds([]); setExamTopicFilter(""); }}
+                className="btn-outline flex-1"
+              >
+                Bağla
+              </button>
+            </div>
+                </>
+              );
+            })()}
+          </>
+        )}
+      </Modal>
+
+      <Modal
+        isOpen={showExamSettings}
+        onClose={() => {
+          setShowExamSettings(false);
+          setSelectedGroupIds([]);
+          setSelectedStudentId(null);
+        }}
+        title="İmtahanı başlat"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="label">Müddət (dəqiqə) *</label>
+            <input
+              type="number"
+              min={1}
+              className="input w-full"
+              value={examDuration}
+              onChange={(e) => setExamDuration(parseInt(e.target.value, 10) || 60)}
+            />
+          </div>
+          <div>
+            <label className="label">Təyin et</label>
+            <div className="flex gap-4 mb-2">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  checked={assignMode === "groups"}
+                  onChange={() => setAssignMode("groups")}
+                />
+                <span>Qruplar</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  checked={assignMode === "student"}
+                  onChange={() => setAssignMode("student")}
+                />
+                <span>Tək şagird</span>
+              </label>
+            </div>
+            {assignMode === "groups" && (
+              <div className="space-y-2 max-h-40 overflow-y-auto">
+                {groups?.map((g) => (
+                  <label key={g.id} className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedGroupIds.includes(Number(g.id))}
+                      onChange={(e) =>
+                        setSelectedGroupIds((prev) =>
+                          e.target.checked
+                            ? [...prev, Number(g.id)]
+                            : prev.filter((id) => id !== Number(g.id))
+                        )
+                      }
+                    />
+                    <span>{g.name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+            {assignMode === "student" && (
+              <select
+                className="input w-full"
+                value={selectedStudentId || ""}
+                onChange={(e) => setSelectedStudentId(e.target.value ? parseInt(e.target.value, 10) : null)}
+              >
+                <option value="">Şagird seçin</option>
+                {students?.map((s) => (
+                  <option key={s.id} value={s.userId ?? s.id}>{s.fullName}</option>
+                ))}
+              </select>
+            )}
+          </div>
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              className="btn-primary flex-1"
+              disabled={
+                startExamMutation.isPending ||
+                (assignMode === "groups" && selectedGroupIds.length === 0) ||
+                (assignMode === "student" && !selectedStudentId)
+              }
+              onClick={() => {
+                if (selectedExamId) {
+                  if (assignMode === "student" && selectedStudentId) {
+                    startExamMutation.mutate(selectedExamId);
+                  } else if (assignMode === "groups" && selectedGroupIds.length > 0) {
+                    startExamMutation.mutate(selectedExamId);
+                  }
+                }
+              }}
+            >
+              Başlat
+            </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowExamSettings(false);
+                  setSelectedGroupIds([]);
+                  setSelectedStudentId(null);
+                }}
+                className="btn-outline flex-1"
+              >
+                Ləğv et
+              </button>
+            </div>
+          </div>
+        </Modal>
+
+      <Modal
+        isOpen={showCreateRunModal}
+        onClose={() => { setShowCreateRunModal(false); setCreateRunGroupId(null); setCreateRunStudentId(null); }}
+        title="Yeni run yarat"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="label">Müddət (dəqiqə) *</label>
+            <input
+              type="number"
+              min={1}
+              className="input w-full"
+              value={examDuration}
+              onChange={(e) => setExamDuration(parseInt(e.target.value, 10) || 60)}
+            />
+          </div>
+          <div>
+            <label className="label">Qrup və ya şagird</label>
+            <select
+              className="input w-full mb-2"
+              value={createRunGroupId ?? ""}
+              onChange={(e) => { setCreateRunGroupId(e.target.value ? parseInt(e.target.value, 10) : null); setCreateRunStudentId(null); }}
+            >
+              <option value="">Qrup seçin</option>
+              {groups?.map((g) => (
+                <option key={g.id} value={g.id}>{g.name}</option>
+              ))}
+            </select>
+            <select
+              className="input w-full"
+              value={createRunStudentId ?? ""}
+              onChange={(e) => { setCreateRunStudentId(e.target.value ? parseInt(e.target.value, 10) : null); setCreateRunGroupId(null); }}
+            >
+              <option value="">və ya tək şagird</option>
+              {students?.map((s) => (
+                <option key={s.id} value={s.userId ?? s.id}>{s.fullName}</option>
+              ))}
+            </select>
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={createRunStartNow} onChange={(e) => setCreateRunStartNow(e.target.checked)} />
+            <span>İndi başlat</span>
+          </label>
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              className="btn-primary flex-1"
+              disabled={createRunMutation.isPending || (!createRunGroupId && !createRunStudentId)}
+              onClick={() => selectedExamId && createRunMutation.mutate(selectedExamId)}
+            >
+              {createRunMutation.isPending ? "Yaradılır…" : "Yarat"}
+            </button>
+            <button type="button" onClick={() => setShowCreateRunModal(false)} className="btn-outline flex-1">Ləğv et</button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={!!showHardDeleteModal}
+        onClose={() => { setShowHardDeleteModal(null); setHardDeleteStep(1); setHardDeleteConfirm(false); setHardDeleteTyped(""); }}
+        title="Tam sil (geri qaytarmaq olmaz)"
+        size="sm"
+      >
+        {showHardDeleteModal && (
+          <div className="space-y-4">
+            {hardDeleteStep === 1 ? (
+              <>
+                <p className="text-slate-600">Bu əməliyyat geri alına bilməz. Davam etmək üçün təsdiq edin.</p>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={hardDeleteConfirm}
+                    onChange={(e) => setHardDeleteConfirm(e.target.checked)}
+                  />
+                  <span>Başa düşürəm, geri qaytarmaq olmaz</span>
+                </label>
+                <div className="flex gap-3 justify-end">
+                  <button type="button" onClick={() => setShowHardDeleteModal(null)} className="btn-outline">Ləğv et</button>
+                  <button
+                    type="button"
+                    onClick={() => hardDeleteConfirm && setHardDeleteStep(2)}
+                    disabled={!hardDeleteConfirm}
+                    className="btn-primary text-red-700 border-red-300 hover:bg-red-50"
+                  >
+                    Növbəti
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-slate-600">Təsdiq üçün <strong>DELETE</strong> və ya element adını yazın: &quot;{showHardDeleteModal.name}&quot;</p>
+                <input
+                  type="text"
+                  className="input w-full"
+                  placeholder="DELETE və ya element adı"
+                  value={hardDeleteTyped}
+                  onChange={(e) => setHardDeleteTyped(e.target.value)}
+                />
+                <div className="flex gap-3 justify-end">
+                  <button type="button" onClick={() => setHardDeleteStep(1)} className="btn-outline">Geri</button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (hardDeleteTyped === "DELETE" || hardDeleteTyped === showHardDeleteModal.name) {
+                        hardDeleteMutation.mutate({ type: showHardDeleteModal.type, id: showHardDeleteModal.id });
+                      }
+                    }}
+                    disabled={hardDeleteTyped !== "DELETE" && hardDeleteTyped !== showHardDeleteModal.name || hardDeleteMutation.isPending}
+                    className="btn-primary text-red-700 border-red-300 hover:bg-red-50"
+                  >
+                    {hardDeleteMutation.isPending ? "Silinir…" : "Tam sil"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        isOpen={showCreateResult}
+        onClose={() => setShowCreateResult(false)}
+        title="Qiymət Əlavə Et"
+        size="lg"
+      >
+        <form onSubmit={handleSubmitResult((v) => createResultMutation.mutate({ ...v, studentProfileId: Number(v.studentProfileId) }))} className="space-y-4">
+          <div>
+            <label className="label">Şagird *</label>
+            <select
+              className="input"
+              {...registerResult("studentProfileId", { valueAsNumber: true })}
+            >
+              <option value={0}>Seçin</option>
+              {students?.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.fullName}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">Qrup</label>
+            <select className="input" {...registerResult("groupId", { valueAsNumber: true })}>
+              <option value={0}>Seçin</option>
+              {groups?.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">Test Adı *</label>
+            <input className="input" {...registerResult("testName")} />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">Xal *</label>
+              <input
+                type="number"
+                className="input"
+                {...registerResult("score", { valueAsNumber: true })}
+              />
+            </div>
+            <div>
+              <label className="label">Maks. Xal *</label>
+              <input
+                type="number"
+                className="input"
+                {...registerResult("maxScore", { valueAsNumber: true })}
+              />
+            </div>
+          </div>
+          <div>
+            <label className="label">Tarix *</label>
+            <input
+              type="date"
+              className="input"
+              {...registerResult("date")}
+              defaultValue={new Date().toISOString().split("T")[0]}
+            />
+          </div>
+          <div className="flex gap-3 pt-4">
+            <button type="submit" className="btn-primary flex-1" disabled={createResultMutation.isPending}>
+              Əlavə et
+            </button>
+            <button type="button" onClick={() => setShowCreateResult(false)} className="btn-outline flex-1">
+              Ləğv et
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Grading Modal */}
+      <Modal
+        isOpen={showGradingModal}
+        onClose={() => {
+          setShowGradingModal(false);
+          setSelectedAttemptId(null);
+          setManualScores({});
+        }}
+        title="Qiymətləndirmə"
+        size="lg"
+      >
+        {attemptDetailLoading ? (
+          <p className="text-slate-500 py-4">Yüklənir...</p>
+        ) : attemptDetail ? (
+          <div className="space-y-4">
+            <div className="border-b border-slate-200 pb-3">
+              <p className="font-semibold text-slate-900">{attemptDetail.examTitle}</p>
+              <p className="text-sm text-slate-600">{attemptDetail.studentName}</p>
+              <p className="text-xs text-slate-500 mt-1">
+                Avto: {attemptDetail.autoScore.toFixed(1)} / {attemptDetail.maxScore}
+              </p>
+            </div>
+            <div className="max-h-96 overflow-y-auto space-y-3">
+              {attemptDetail.answers.map((ans, idx) => (
+                <div key={`ans-${ans.id ?? ans.questionId}-${idx}`} className="border border-slate-200 rounded-lg p-3">
+                  <p className="text-sm font-medium text-slate-900 mb-1">{ans.questionText}</p>
+                  <p className="text-xs text-slate-500 mb-2">Tip: {ans.questionType}</p>
+                  {ans.selectedOptionId && (
+                    <p className="text-xs text-slate-600 mb-1">Seçilmiş variant: {ans.selectedOptionId}</p>
+                  )}
+                  {ans.textAnswer && (
+                    <p className="text-xs text-slate-600 mb-1 bg-slate-50 p-2 rounded">Cavab: {ans.textAnswer}</p>
+                  )}
+                  {ans.questionType === "SITUATION" && attemptDetail.canvases?.find((c) => c.questionId === ans.questionId)?.imageUrl && (
+                    <div className="mt-2">
+                      <button
+                        type="button"
+                        onClick={() => setCanvasPreviewUrl(attemptDetail.canvases!.find((c) => c.questionId === ans.questionId)!.imageUrl!)}
+                        className="text-sm text-blue-600 hover:underline"
+                      >
+                        Qaralamaya bax
+                      </button>
+                      <img
+                        src={attemptDetail.canvases!.find((c) => c.questionId === ans.questionId)!.imageUrl!}
+                        alt="Canvas preview"
+                        className="mt-1 max-h-24 rounded border border-slate-200 cursor-pointer"
+                        onClick={() => setCanvasPreviewUrl(attemptDetail.canvases!.find((c) => c.questionId === ans.questionId)!.imageUrl!)}
+                      />
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between mt-2">
+                    <span className="text-xs text-slate-600">
+                      Avto: {ans.autoScore.toFixed(1)}
+                    </span>
+                    {ans.requiresManualCheck && (
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs text-slate-700">Manual xal:</label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min={0}
+                          className="input text-sm w-20"
+                          value={manualScores[ans.id] ?? ans.manualScore ?? ""}
+                          onChange={(e) =>
+                            setManualScores((prev) => ({
+                              ...prev,
+                              [ans.id]: parseFloat(e.target.value) || 0,
+                            }))
+                          }
+                        />
+                        <span className="text-xs text-slate-500">(max ~{attemptDetail.maxScore === 150 ? "9" : "7"} bal)</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-3 pt-4 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() => {
+                  if (selectedAttemptId) {
+                    gradeAttemptMutation.mutate({ attemptId: selectedAttemptId, publish: false });
+                  }
+                }}
+                disabled={gradeAttemptMutation.isPending}
+                className="btn-primary flex-1"
+              >
+                Yadda saxla
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (selectedAttemptId) {
+                    gradeAttemptMutation.mutate({ attemptId: selectedAttemptId, publish: true });
+                  }
+                }}
+                disabled={gradeAttemptMutation.isPending}
+                className="btn-outline flex-1"
+              >
+                Yayımla
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowGradingModal(false);
+                  setSelectedAttemptId(null);
+                  setManualScores({});
+                  setCanvasPreviewUrl(null);
+                }}
+                className="btn-outline"
+              >
+                Bağla
+              </button>
+            </div>
+          </div>
+        ) : (
+          <p className="text-slate-500 py-4">Məlumat yüklənmədi</p>
+        )}
+      </Modal>
+
+      <Modal
+        isOpen={!!canvasPreviewUrl}
+        onClose={() => setCanvasPreviewUrl(null)}
+        title="Situasiya qaralama"
+        size="lg"
+      >
+        {canvasPreviewUrl && (
+          <img
+            src={canvasPreviewUrl}
+            alt="Canvas"
+            className="w-full max-h-[70vh] object-contain rounded border"
+          />
+        )}
+      </Modal>
+    </div>
+  );
+}

@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bulk User Import - Bekrin School</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        h1 {
+            color: #667eea;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 32px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 16px;
+        }
+        .info-box {
+            background: linear-gradient(135deg, #e0e7ff 0%, #f3e8ff 100%);
+            border-left: 5px solid #667eea;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 25px 0;
+        }
+        .info-box strong {
+            color: #667eea;
+            font-size: 18px;
+        }
+        .info-box ul {
+            margin: 15px 0 0 25px;
+            line-height: 1.8;
+        }
+        .warning-box {
+            background: #fef3c7;
+            border-left: 5px solid #f59e0b;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 25px 0;
+        }
+        .warning-box strong {
+            color: #d97706;
+            font-size: 18px;
+        }
+        .csv-area {
+            width: 100%;
+            min-height: 250px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            padding: 20px;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            margin: 20px 0;
+            background: #f9fafb;
+            resize: vertical;
+        }
+        .csv-area:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        .btn {
+            padding: 16px 32px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            margin: 10px 8px;
+            transition: all 0.3s;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(16, 185, 129, 0.3);
+        }
+        .btn-secondary {
+            background: linear-gradient(135deg, #667eea 0%, #5568d3 100%);
+            color: white;
+        }
+        .btn-secondary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(102, 126, 234, 0.3);
+        }
+        .btn:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+            transform: none;
+            opacity: 0.6;
+        }
+        .progress {
+            width: 100%;
+            height: 50px;
+            background: #e5e7eb;
+            border-radius: 25px;
+            overflow: hidden;
+            margin: 25px 0;
+            display: none;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #10b981, #059669);
+            transition: width 0.5s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 18px;
+        }
+        .log {
+            background: #1f2937;
+            color: #e5e7eb;
+            border: 2px solid #374151;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 25px 0;
+            max-height: 450px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            display: none;
+        }
+        .log-entry {
+            margin: 6px 0;
+            padding: 6px 10px;
+            border-radius: 4px;
+            line-height: 1.5;
+        }
+        .log-success {
+            color: #6ee7b7;
+            background: rgba(16, 185, 129, 0.1);
+            border-left: 3px solid #10b981;
+            padding-left: 10px;
+        }
+        .log-error {
+            color: #fca5a5;
+            background: rgba(239, 68, 68, 0.1);
+            border-left: 3px solid #ef4444;
+            padding-left: 10px;
+        }
+        .log-info {
+            color: #93c5fd;
+        }
+        .log-warning {
+            color: #fcd34d;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin: 25px 0;
+            display: none;
+        }
+        .stat-card {
+            background: linear-gradient(135deg, #f9fafb 0%, #e5e7eb 100%);
+            padding: 25px;
+            border-radius: 15px;
+            text-align: center;
+            border: 2px solid #e5e7eb;
+            transition: all 0.3s;
+        }
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+        }
+        .stat-number {
+            font-size: 48px;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .stat-label {
+            color: #666;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        .buttons-container {
+            text-align: center;
+            margin: 30px 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            background: white;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        th {
+            background: #f3f4f6;
+            font-weight: 600;
+            color: #374151;
+        }
+        code {
+            background: #f3f4f6;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+        .format-example {
+            background: #f0f9ff;
+            border: 2px dashed #3b82f6;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+        @media (max-width: 768px) {
+            .stats {
+                grid-template-columns: 1fr;
+            }
+            .container {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>👥 Bulk User Import</h1>
+        <div class="subtitle">240 istifadəçini bir dəfəyə yaradın (şagird + valideyn)</div>
+
+        <div class="info-box">
+            <strong>🚀 Bu sistem nə edir?</strong><br><br>
+            <ul>
+                <li>✅ Firebase Cloud Function ilə avtomatik user yaradır</li>
+                <li>✅ Eyni vaxtda Authentication və Firestore-a əlavə edir</li>
+                <li>✅ Şagird və valideynləri eyni anda import edir</li>
+                <li>✅ Progress tracking və detailed logs</li>
+                <li>✅ Tam təhlükəsiz və backend-də işləyir</li>
+            </ul>
+        </div>
+
+        <div class="warning-box">
+            <strong>⚠️ Diqqət:</strong><br><br>
+            Bu əməliyyat geri alına bilməz! Import etməzdən əvvəl CSV məlumatlarını yoxlayın.
+        </div>
+
+        <h3 style="margin-top: 30px;">📝 Format Nümunəsi:</h3>
+        
+        <div class="format-example">
+            <strong>CSV Format:</strong> <code>fullName,email,phone,password,role</code><br><br>
+            <strong>Nümunə:</strong><br>
+            <code>Ayşən Əliyeva,aysen@bekrin.com,+994501234567,Aysen123,student</code>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>fullName</th>
+                    <th>email</th>
+                    <th>phone</th>
+                    <th>password</th>
+                    <th>role</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Ayşən Əliyeva</td>
+                    <td>aysen@bekrin.com</td>
+                    <td>+994501234567</td>
+                    <td>Aysen123</td>
+                    <td>student</td>
+                </tr>
+                <tr>
+                    <td>Əli Əliyev</td>
+                    <td>ali@bekrin.com</td>
+                    <td>+994501234568</td>
+                    <td>Ali123</td>
+                    <td>parent</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3 style="margin-top: 30px;">📋 CSV Məlumatları:</h3>
+        <textarea class="csv-area" id="csvInput" placeholder="fullName,email,phone,password,role
+Ayşən Əliyeva,aysen@bekrin.com,+994501234567,Aysen123,student
+Əli Əliyev,ali@bekrin.com,+994501234568,Ali123,parent
+..."></textarea>
+
+        <div class="buttons-container">
+            <button class="btn btn-secondary" onclick="downloadTemplate()">📥 Şablon Yüklə (CSV)</button>
+            <button class="btn btn-primary" id="importBtn" onclick="startImport()">✅ 240 User İmport Et</button>
+        </div>
+
+        <div class="progress" id="progressBar">
+            <div class="progress-bar" id="progressFill" style="width: 0%">
+                <span id="progressText">0%</span>
+            </div>
+        </div>
+
+        <div class="stats" id="stats">
+            <div class="stat-card">
+                <div class="stat-number" style="color: #3b82f6;" id="totalCount">0</div>
+                <div class="stat-label">📊 Cəmi</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" style="color: #10b981;" id="successCount">0</div>
+                <div class="stat-label">✅ Uğurlu</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" style="color: #ef4444;" id="errorCount">0</div>
+                <div class="stat-label">❌ Xətalı</div>
+            </div>
+        </div>
+
+        <div class="log" id="log"></div>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-functions-compat.js"></script>
+
+    <script>
+        // Firebase Config
+        const firebaseConfig = {
+            apiKey: "AIzaSyDE05ufg0FhPIAecIJ_ehr9yIFQKxIwncA",
+            authDomain: "bekrinschool.firebaseapp.com",
+            projectId: "bekrinschool",
+            storageBucket: "bekrinschool.firebasestorage.app",
+            messagingSenderId: "678081137706",
+            appId: "1:678081137706:web:75601b998dde21f25f0753"
+        };
+
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+
+        const auth = firebase.auth();
+        const functions = firebase.functions();
+        functions.useRegion('europe-west1');
+
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            logDiv.style.display = 'block';
+            
+            const timestamp = new Date().toLocaleTimeString('az-AZ');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            entry.textContent = `[${timestamp}] ${message}`;
+            
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function updateProgress(current, total) {
+            const percentage = Math.round((current / total) * 100);
+            document.getElementById('progressBar').style.display = 'block';
+            document.getElementById('progressFill').style.width = percentage + '%';
+            document.getElementById('progressText').textContent = `${current}/${total} (${percentage}%)`;
+        }
+
+        function updateStats(total, success, error) {
+            document.getElementById('stats').style.display = 'grid';
+            document.getElementById('totalCount').textContent = total;
+            document.getElementById('successCount').textContent = success;
+            document.getElementById('errorCount').textContent = error;
+        }
+
+        function parseCSV(text) {
+            const lines = text.trim().split('\n');
+            const headers = lines[0].split(',').map(h => h.trim());
+            
+            const users = [];
+            for (let i = 1; i < lines.length; i++) {
+                if (!lines[i].trim()) continue;
+                
+                const values = lines[i].split(',').map(v => v.trim());
+                const user = {};
+                
+                headers.forEach((header, index) => {
+                    user[header] = values[index] || '';
+                });
+                
+                users.push(user);
+            }
+            
+            return users;
+        }
+
+        async function startImport() {
+            if (!auth.currentUser) {
+                alert('⚠️ Zəhmət olmasa login olun!');
+                window.location.href = 'index.html';
+                return;
+            }
+
+            const csvText = document.getElementById('csvInput').value.trim();
+            
+            if (!csvText) {
+                alert('⚠️ CSV məlumatları daxil edin!');
+                return;
+            }
+
+            if (!confirm(`Bu əməliyyat geri alına bilməz!\n\nBütün userləri yaratmaq istədiyinizə əminsiniz?`)) {
+                return;
+            }
+
+            const btn = document.getElementById('importBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Import edilir...';
+
+            log('🔄 Import başladı...', 'info');
+            log('─────────────────────────────────', 'info');
+
+            try {
+                const users = parseCSV(csvText);
+                log(`📊 ${users.length} user tapıldı`, 'info');
+                log('─────────────────────────────────', 'info');
+                log('☁️ Cloud Function çağırılır...', 'info');
+
+                updateProgress(0, users.length);
+
+                const bulkCreateUsers = functions.httpsCallable('bulkCreateUsers');
+                const result = await bulkCreateUsers({ users: users });
+
+                log('─────────────────────────────────', 'info');
+                log('📊 NƏTİCƏ:', 'info');
+                log(`✅ Uğurlu: ${result.data.successCount}`, 'success');
+                log(`❌ Xətalı: ${result.data.errorCount}`, 'error');
+                log('─────────────────────────────────', 'info');
+
+                result.data.success.forEach(user => {
+                    log(`✅ ${user.email} (${user.role})`, 'success');
+                });
+
+                if (result.data.errors.length > 0) {
+                    log('─────────────────────────────────', 'info');
+                    log('❌ XƏTALAR:', 'error');
+                    result.data.errors.forEach(error => {
+                        log(`❌ ${error.email}: ${error.error}`, 'error');
+                    });
+                }
+
+                updateProgress(users.length, users.length);
+                updateStats(result.data.total, result.data.successCount, result.data.errorCount);
+
+                log('─────────────────────────────────', 'info');
+                log('🎉 Import tamamlandı!', 'success');
+
+                btn.textContent = '✅ Tamamlandı!';
+                btn.style.background = 'linear-gradient(135deg, #10b981 0%, #059669 100%)';
+
+            } catch (error) {
+                log('─────────────────────────────────', 'info');
+                log(`❌ Fatal xəta: ${error.message}`, 'error');
+                console.error(error);
+                
+                btn.disabled = false;
+                btn.textContent = '🔄 Yenidən Cəhd Et';
+            }
+        }
+
+        function downloadTemplate() {
+            const template = `fullName,email,phone,password,role
+Nigar Həsənova,nigar1@bekrin.com,+994501234569,Nigar123,student
+Həsən Həsənov,hasan1@bekrin.com,+994501234570,Hasan123,parent`;
+
+            const blob = new Blob([template], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'bulk-import-template.csv';
+            link.click();
+
+            log('📥 Şablon yükləndi: bulk-import-template.csv', 'success');
+        }
+
+        auth.onAuthStateChanged(user => {
+            if (!user) {
+                document.getElementById('importBtn').disabled = true;
+                document.getElementById('importBtn').textContent = '⚠️ Login olmalısınız';
+                log('⚠️ Import etmək üçün müəllim hesabı ilə login olun', 'warning');
+            } else {
+                log(`✅ Login: ${user.email}`, 'success');
+                log('💡 CSV məlumatlarını daxil edib "Import Et" düyməsinə basın', 'info');
+            }
+        });
+    </script>
+</body>
+</html>

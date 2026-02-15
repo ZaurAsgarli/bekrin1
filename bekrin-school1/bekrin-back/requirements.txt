@@ -1,0 +1,11 @@
+Django
+Pillow
+djangorestframework
+djangorestframework-simplejwt
+psycopg2-binary
+python-dotenv
+django-cors-headers
+drf-spectacular
+django-environ
+openpyxl
+cryptography

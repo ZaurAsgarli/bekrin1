@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Davamiyyət - Müəllim</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 100%;
+            margin: 0 auto;
+        }
+
+        /* Header */
+        .header {
+            background: white;
+            padding: 20px 30px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .header h2 {
+            color: #667eea;
+            font-size: 28px;
+        }
+
+        .header-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        .back-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .back-btn:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+        }
+
+        /* Groups List */
+        .groups-section {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .groups-section h3 {
+            color: #667eea;
+            font-size: 22px;
+            margin-bottom: 20px;
+        }
+
+        .groups-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 15px;
+        }
+
+        .group-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .group-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 15px rgba(0,0,0,0.2);
+        }
+
+        .group-card-name {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+
+        .group-card-info {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        /* Attendance Section */
+        .attendance-section {
+            display: none;
+        }
+
+        .attendance-section.active {
+            display: block;
+        }
+
+        .attendance-header {
+            background: white;
+            padding: 20px 30px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .attendance-header h3 {
+            color: #667eea;
+            font-size: 24px;
+        }
+
+        .add-month-btn {
+            background: #10b981;
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .add-month-btn:hover {
+            background: #059669;
+            transform: translateY(-2px);
+        }
+
+        /* Table Container */
+        .table-container {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .table-wrapper {
+            overflow-x: auto;
+            padding: 10px;
+            max-height: 65vh;
+        }
+
+        /* Table */
+        .attendance-table {
+            width: auto;
+            border-collapse: collapse;
+            font-size: 12px;
+            table-layout: fixed;
+        }
+
+        .attendance-table th,
+        .attendance-table td {
+            border: 1px solid #e5e7eb;
+            padding: 6px 4px;
+            text-align: center;
+            width: 70px;
+            max-width: 70px;
+        }
+
+        .attendance-table th {
+            background: #f3f4f6;
+            color: #333;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+            z-index: 5;
+        }
+
+        .student-name-cell {
+            text-align: left !important;
+            font-weight: 600;
+            color: #667eea;
+            width: 150px;
+            max-width: 150px;
+            min-width: 150px;
+            position: sticky;
+            left: 0;
+            background: white;
+            z-index: 3;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-size: 11px;
+            padding: 6px 8px;
+        }
+
+        /* Month Header */
+        .month-header-cell {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            font-weight: bold;
+            font-size: 13px;
+            padding: 8px 4px;
+            cursor: pointer;
+            transition: all 0.3s;
+            width: auto;
+        }
+
+        .month-header-cell:hover {
+            background: linear-gradient(135deg, #5568d3 0%, #6939a1 100%);
+        }
+
+        .month-header-content {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        /* Date Cell */
+        .date-cell {
+            cursor: pointer;
+            background: #667eea;
+            color: white;
+            font-weight: bold;
+            transition: all 0.2s;
+            position: relative;
+            font-size: 11px;
+            padding: 4px 2px;
+        }
+
+        .date-cell:hover {
+            background: #5568d3;
+        }
+
+        .date-cell-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .date-display {
+            font-size: 11px;
+        }
+
+        .date-placeholder {
+            font-size: 9px;
+            opacity: 0.8;
+        }
+
+        /* Status Cell */
+        .status-cell {
+            cursor: pointer;
+            position: relative;
+            background: #f9fafb;
+            transition: all 0.2s;
+            font-weight: 600;
+            font-size: 10px;
+            padding: 4px 2px;
+        }
+
+        .status-cell:hover {
+            background: #e5e7eb;
+        }
+
+        .status-cell.present {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .status-cell.late {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .status-cell.absent {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .status-cell.excused {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        /* Status Dropdown */
+        .status-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: white;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+            z-index: 100;
+            display: none;
+            min-width: 150px;
+            margin-top: 5px;
+        }
+
+        .status-dropdown.active {
+            display: block;
+        }
+
+        .status-option {
+            padding: 12px 15px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-option:hover {
+            background: #f3f4f6;
+        }
+
+        .status-option.present {
+            color: #065f46;
+        }
+
+        .status-option.late {
+            color: #92400e;
+        }
+
+        .status-option.absent {
+            color: #991b1b;
+        }
+
+        .status-option.excused {
+            color: #1e40af;
+        }
+
+        .status-option.clear {
+            color: #ef4444;
+            border-top: 1px solid #e5e7eb;
+        }
+
+        /* Date Modal */
+        .date-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .date-modal.active {
+            display: flex;
+        }
+
+        .date-modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            max-width: 400px;
+            width: 90%;
+        }
+
+        .date-modal-content h4 {
+            color: #667eea;
+            font-size: 22px;
+            margin-bottom: 20px;
+        }
+
+        .date-input-group {
+            margin-bottom: 20px;
+        }
+
+        .date-input-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 600;
+        }
+
+        .date-input-group input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+
+        .date-modal-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+
+        .modal-btn {
+            padding: 12px 25px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .modal-btn-confirm {
+            background: #667eea;
+            color: white;
+        }
+
+        .modal-btn-confirm:hover {
+            background: #5568d3;
+        }
+
+        .modal-btn-cancel {
+            background: #e5e7eb;
+            color: #333;
+        }
+
+        .modal-btn-cancel:hover {
+            background: #d1d5db;
+        }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: white;
+            font-size: 18px;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+
+        .empty-state i {
+            font-size: 64px;
+            color: #667eea;
+            margin-bottom: 20px;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .attendance-table {
+                font-size: 12px;
+            }
+
+            .attendance-table th,
+            .attendance-table td {
+                padding: 8px 4px;
+                min-width: 80px;
+            }
+
+            .student-name-cell {
+                min-width: 150px;
+            }
+        }
+
+        /* Collapsed Month Styles */
+        .month-header-cell.collapsed {
+            width: 30px;
+            max-width: 30px;
+            padding: 8px 2px;
+        }
+
+        .month-columns.collapsed {
+            width: 0 !important;
+            max-width: 0 !important;
+            padding: 0 !important;
+            border: none !important;
+            overflow: hidden;
+            opacity: 0;
+        }
+
+        .month-header-content i {
+            transition: transform 0.3s;
+        }
+
+        .month-header-cell.collapsed .month-header-content i {
+            transform: rotate(-90deg);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h2><i class="fas fa-clipboard-check"></i> Davamiyyət İdarəetməsi</h2>
+            <div class="header-buttons">
+                <button class="back-btn" onclick="window.location.href='teacher-dashboard.html'">
+                    <i class="fas fa-arrow-left"></i> Geri
+                </button>
+            </div>
+        </div>
+
+        <!-- Groups List Section -->
+        <div id="groupsSection" class="groups-section">
+            <h3><i class="fas fa-users"></i> Qrupları Seçin</h3>
+            <div id="groupsGrid" class="groups-grid">
+                <div class="loading">
+                    <i class="fas fa-spinner fa-spin"></i> Qruplar yüklənir...
+                </div>
+            </div>
+        </div>
+
+        <!-- Attendance Section -->
+        <div id="attendanceSection" class="attendance-section">
+            <div class="attendance-header">
+                <h3 id="groupName"><i class="fas fa-calendar-check"></i> Qrup Davamiyyəti</h3>
+                <button class="add-month-btn" onclick="addNewMonth()">
+                    <i class="fas fa-plus"></i> Yeni Ay Əlavə Et
+                </button>
+            </div>
+
+            <div class="table-container">
+                <div class="table-wrapper">
+                    <table class="attendance-table" id="attendanceTable">
+                        <!-- Table content will be generated dynamically -->
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Date Modal -->
+    <div id="dateModal" class="date-modal">
+        <div class="date-modal-content">
+            <h4><i class="fas fa-calendar"></i> Dərsin Tarixini Seçin</h4>
+            <div class="date-input-group">
+                <label for="dateInput">Tarix:</label>
+                <input type="date" id="dateInput">
+            </div>
+            <div class="date-modal-buttons">
+                <button class="modal-btn modal-btn-cancel" onclick="closeDateModal()">
+                    <i class="fas fa-times"></i> Ləğv et
+                </button>
+                <button class="modal-btn modal-btn-confirm" onclick="confirmDate()">
+                    <i class="fas fa-check"></i> Təsdiq et
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Status Dropdown Template (will be cloned) -->
+    <div id="statusDropdownTemplate" class="status-dropdown">
+        <div class="status-option present" data-status="present">
+            <i class="fas fa-check-circle"></i> Dərsdə
+        </div>
+        <div class="status-option late" data-status="late">
+            <i class="fas fa-clock"></i> Gecikdi
+        </div>
+        <div class="status-option absent" data-status="absent">
+            <i class="fas fa-times-circle"></i> Gəlmədi
+        </div>
+        <div class="status-option excused" data-status="excused">
+            <i class="fas fa-file-medical"></i> Üzrlü
+        </div>
+        <div class="status-option clear" data-status="clear">
+            <i class="fas fa-eraser"></i> Təmizlə
+        </div>
+    </div>
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+
+    <script src="teacher-attendance.js"></script>
+</body>
+</html>

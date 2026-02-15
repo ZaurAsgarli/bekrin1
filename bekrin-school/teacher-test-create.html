@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yeni Test Yarat - Bekrin School</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        .create-container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: #4CAF50;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #45a049;
+        }
+
+        .btn-secondary {
+            background: #2196F3;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #0b7dda;
+        }
+
+        .form-section {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #2196F3;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: bold;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #2196F3;
+        }
+
+        .radio-group {
+            display: flex;
+            gap: 30px;
+        }
+
+        .radio-option {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 15px 25px;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .radio-option:hover {
+            border-color: #2196F3;
+            background: #f5f9ff;
+        }
+
+        .radio-option input[type="radio"] {
+            width: auto;
+            margin: 0;
+        }
+
+        .radio-option.selected {
+            border-color: #2196F3;
+            background: #E3F2FD;
+        }
+
+        .info-box {
+            background: #E3F2FD;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 10px;
+            color: #1976D2;
+            font-size: 14px;
+        }
+
+        .info-box a {
+            color: #1976D2;
+            text-decoration: underline;
+            cursor: pointer;
+        }
+
+        .answer-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .answer-item {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .answer-label {
+            font-size: 13px;
+            color: #666;
+            font-weight: bold;
+        }
+
+        .answer-select {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        .answer-input {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: flex-end;
+            margin-top: 30px;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="create-container">
+        <!-- Header -->
+        <div class="header">
+            <div class="header-left">
+                <button id="backBtn" class="btn btn-secondary">← Geri</button>
+                <h1 id="pageTitle">📝 Yeni Test Yarat</h1>
+            </div>
+        </div>
+
+        <form id="testForm">
+            <!-- 1. Test Növü Seçimi -->
+            <div class="form-section">
+                <div class="section-title">1. Test Növü</div>
+                <div class="radio-group">
+                    <label class="radio-option" id="quizOption">
+                        <input type="radio" name="testType" value="quiz" required>
+                        <div>
+                            <div style="font-weight: bold; margin-bottom: 5px;">Quiz</div>
+                            <div style="font-size: 13px; color: #666;">
+                                15 sual (10 qapalı + 3 açıq + 2 yazı)
+                            </div>
+                        </div>
+                    </label>
+                    <label class="radio-option" id="sinaqOption">
+                        <input type="radio" name="testType" value="sinaq" required>
+                        <div>
+                            <div style="font-weight: bold; margin-bottom: 5px;">Sınaq</div>
+                            <div style="font-size: 13px; color: #666;">
+                                30 sual (22 qapalı + 5 açıq + 3 yazı)
+                            </div>
+                        </div>
+                    </label>
+                </div>
+            </div>
+
+            <!-- 2. Test Məlumatları -->
+            <div class="form-section">
+                <div class="section-title">2. Test Məlumatları</div>
+                <div class="form-group">
+                    <label for="testName">Test Adı *</label>
+                    <input type="text" id="testName" placeholder="Məsələn: Fizika - Mexanika" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="pdfUrl">Test PDF Linki (Google Drive) *</label>
+                    <input type="url" id="pdfUrl" placeholder="https://drive.google.com/uc?export=view&id=..." required>
+                    <div class="info-box">
+                        ℹ️ <strong>Necə əldə etmək olar?</strong><br>
+                        1. PDF-i Google Drive-a yüklə<br>
+                        2. Sağ klik → Share → "Anyone with the link" seç<br>
+                        3. Copy link<br>
+                        4. Link formatı: <code>https://drive.google.com/file/d/[FILE_ID]/view</code><br>
+                        5. Buraya yapışdır (avtomatik formatlanacaq)
+                    </div>
+                </div>
+            </div>
+
+            <!-- 3. Cavab Açarı -->
+            <div class="form-section" id="answerKeySection" style="display: none;">
+                <div class="section-title">3. Cavab Açarı</div>
+
+                <!-- Qapalı Suallar -->
+                <div id="closedQuestionsSection">
+                    <h3 style="color: #333; margin-bottom: 15px;">
+                        Qapalı Suallar (<span id="closedCount">0</span> sual)
+                    </h3>
+                    <div class="answer-grid" id="closedAnswers"></div>
+                </div>
+
+                <!-- Açıq Suallar -->
+                <div id="openQuestionsSection" style="margin-top: 30px;">
+                    <h3 style="color: #333; margin-bottom: 15px;">
+                        Açıq Suallar (<span id="openCount">0</span> sual)
+                    </h3>
+                    <div class="info-box">
+                        ℹ️ Açıq suallarda rəqəm cavablar daxil edin (məsələn: 25, 143, 256)
+                    </div>
+                    <div class="answer-grid" id="openAnswers"></div>
+                </div>
+
+                <!-- Yazı İşləri -->
+                <div id="writingQuestionsSection" style="margin-top: 30px;">
+                    <h3 style="color: #333; margin-bottom: 15px;">
+                        Yazı İşləri (<span id="writingCount">0</span> sual)
+                    </h3>
+                    <div class="info-box">
+                        ℹ️ Yazı işləri şagirdlər tərəfindən həll edildikdən sonra müəllim tərəfindən qiymətləndiriləcək.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="action-buttons">
+                <button type="button" id="cancelBtn" class="btn btn-secondary">Ləğv et</button>
+                <button type="submit" id="submitBtn" class="btn btn-primary">Yadda saxla</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+
+    <!-- Custom JS -->
+    <script src="teacher-test-create.js"></script>
+</body>
+</html>
