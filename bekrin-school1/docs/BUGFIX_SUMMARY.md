@@ -1,5 +1,27 @@
 # Bug-Fix Summary — BekrinSchool
 
+## CRITICAL FIX: Balance Charge & Notifications (2024-01-XX)
+
+### Problem
+- Balances never decrease after marking attendance
+- Low-balance notifications do not clear after payment
+
+### Root Cause
+- Attendance save endpoint was not properly returning charge details
+- Frontend was not invalidating queries correctly
+- Tests were missing for idempotency
+
+### Solution
+- Enhanced `finalize_lesson_and_charge()` to return detailed charge info
+- Added proof fields to attendance save response
+- Created comprehensive tests proving idempotency
+- Verified notifications query REAL balance and auto-resolve after payment
+
+### Proof Documentation
+See: `docs/BALANCE_CHARGE_PROOF.md`
+
+---
+
 ## 3 Qızıl Qayda (endpoint xətası çıxmasın)
 
 1. **Heç bir endpoint path-i dəyişmə** — yalnız əlavə et
@@ -42,7 +64,23 @@ npm run build
 
 ## Files Changed
 
-### Backend
+### Backend (Balance Charge Fix)
+| File | Change |
+|------|--------|
+| `attendance/services/lesson_finalize.py` | Returns `(lesson_held_created, students_charged, charge_details)` with proof fields |
+| `attendance/views/teacher.py` | Response includes `ok`, `date`, `groupId`, `charged_count`, `delivered_marked`, `charged_students` (proof fields) |
+| `tests/test_attendance_charge_comprehensive.py` | Comprehensive tests: idempotency, double-save prevention, payment clearing notifications |
+| `groups/views/teacher.py` | `teacher_notifications_low_balance_view` queries `balance__lte=Decimal('0')` (REAL balance) |
+| `payments/serializers.py` | Already calls `auto_resolve_balance_notifications()` after payment |
+
+### Frontend (Balance Charge Fix)
+| File | Change |
+|------|--------|
+| `app/(teacher)/teacher/attendance/page.tsx` | Logs request details, handles new response format with `charged_count`, shows charge details in toast |
+| `lib/teacher.ts` | Updated `saveAttendance` TypeScript interface to match new response format |
+| `app/(teacher)/teacher/payments/page.tsx` | Already invalidates notifications query after payment |
+
+### Backend (Previous Fixes)
 | File | Change |
 |------|--------|
 | `config/exceptions.py` | 500 cavabında stack trace gizlədilir; standart `{ detail, code }` |
@@ -73,6 +111,13 @@ npm run build
 
 ## Endpoints (backward compatible)
 
+### Balance Charge Endpoints
+| Method | Path | Purpose | Response Fields |
+|--------|------|---------|-----------------|
+| POST | `/api/teacher/attendance/save` | Save attendance + finalize lesson | `ok`, `date`, `groupId`, `charged`, `charged_count`, `delivered_marked`, `charged_students` (proof) |
+| GET | `/api/teacher/notifications/low-balance` | Low balance students | `unread_count`, `items` (derived from REAL balance) |
+
+### Previous Endpoints
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/student/exams/my-results?type=quiz\|exam` | Student results (submitted + unpublished) |
@@ -82,6 +127,56 @@ npm run build
 ---
 
 ## Verification Checklist
+
+### Balance Charge & Notifications (CRITICAL)
+
+#### 1. Attendance Save Decreases Balance
+1. Open attendance page, select group and date
+2. Mark students as present
+3. Click "Saxla" button
+4. **Verify:** Browser console shows `[ATTENDANCE_SAVE] Response received:` with `charged: true`, `charged_count > 0`
+5. **Verify:** Response includes `charged_students` array with `oldBalance` and `newBalance`
+6. **Verify:** Toast shows "✅ Davamiyyət saxlanıldı və dərs yekunlaşdırıldı. X şagirdin balansı yeniləndi."
+7. **Verify:** Student list refreshes, balances updated
+
+#### 2. Idempotency (No Double Charge)
+1. Save attendance for same date again
+2. **Verify:** Response shows `charged: false`, `charged_count: 0`, `charged_students: []`
+3. **Verify:** Toast shows "Davamiyyət saxlanıldı. Bu tarix üçün dərs artıq yekunlaşdırılıb..."
+4. **Verify:** Student balances unchanged (check DB or UI)
+
+#### 3. Payment Clears Notification
+1. Set student balance to 0 (via DB or multiple lesson charges)
+2. **Verify:** Student appears in notifications dropdown (bell icon)
+3. Create payment for student (amount > 0)
+4. **Verify:** Toast shows "✅ Ödəniş əlavə olundu!"
+5. **Verify:** Notifications dropdown refreshes, student disappears
+6. **Verify:** Student balance > 0 in student list
+
+#### 4. Automated Tests
+```bash
+cd bekrin-back
+.venv\Scripts\activate
+python manage.py test tests.test_attendance_charge_comprehensive -v 2
+```
+**Expected:** All 4 tests pass ✅
+
+#### 5. DB Verification (Manual)
+```sql
+-- After first attendance save
+SELECT id, balance FROM student_profiles WHERE id = <student_id>;
+-- Should show decreased balance
+
+SELECT COUNT(*) FROM lessons_held WHERE group_id = <group_id> AND date = '<date>';
+-- Should return 1
+
+SELECT COUNT(*) FROM balance_ledger 
+WHERE student_profile_id = <student_id> AND group_id = <group_id> AND date = '<date>' AND reason = 'LESSON_CHARGE';
+-- Should return 1
+
+-- After second save (same date)
+-- All counts should be unchanged
+```
 
 ### A) Quiz nəticələrim
 1. Teacher: Quiz yarat → qrup təyin et → Start now → 10 dəq

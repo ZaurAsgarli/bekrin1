@@ -11,12 +11,42 @@ export interface Student {
   status?: "active" | "deleted";
 }
 
+/** Weekday numbers: Mon=1, Tue=2, Wed=3, Thu=4, Fri=5, Sat=6, Sun=7 */
+export const LESSON_DAY_LABELS: Record<number, string> = {
+  1: "B.e",   // Bazar ertəsi (Mon)
+  2: "Ç.a",   // Çərşənbə axşamı (Tue)
+  3: "Ç",     // Çərşənbə (Wed)
+  4: "C.a",   // Cümə axşamı (Thu)
+  5: "C",     // Cümə (Fri)
+  6: "Ş",     // Şənbə (Sat)
+  7: "B",     // Bazar (Sun)
+};
+
+/** Derive compact day label from lesson_days (Mon=1..Sun=7). "1-4" = days 1 and 4 only. */
+export function deriveDisplayNameFromDays(days: number[], startTime?: string | null): string {
+  if (!days?.length) return "";
+  const sorted = [...new Set(days)].filter((d) => d >= 1 && d <= 7).sort((a, b) => a - b);
+  if (sorted.length === 0) return "";
+  const dayPart = sorted.join("-");
+  if (startTime) {
+    const t = startTime.replace(/^(\d{1,2}):(\d{2}).*/, "$1:$2");
+    return `${dayPart} ${t}`.trim();
+  }
+  return dayPart;
+}
+
 export interface Group {
   id: string;
   name: string;
+  display_name?: string | null;
+  display_name_is_manual?: boolean;
+  lesson_days?: number[];
+  start_time?: string | null;
   studentCount?: number;
   active?: boolean;
   order?: number;
+  monthly_fee?: number | null;
+  monthly_lessons_count?: number;
 }
 
 export interface Payment {
@@ -31,6 +61,16 @@ export interface Payment {
   status: "paid" | "pending";
   note?: string;
   paymentNumber?: string;
+  sequenceNumber?: number | null;
+}
+
+export interface Notification {
+  id: number;
+  type: "BALANCE_ZERO" | "BALANCE_LOW";
+  student?: { id: number; fullName: string } | null;
+  message: string;
+  is_read: boolean;
+  created_at: string;
 }
 
 export interface TeacherStats {
@@ -40,8 +80,33 @@ export interface TeacherStats {
   codingExercisesCount: number;
 }
 
+/** Low-balance alert for teacher dashboard (balance_real <= 0). */
+export interface LowBalanceNotification {
+  studentId: string;
+  fullName: string;
+  grade: string;
+  displayBalanceTeacher: number;
+  realBalance: number;
+  reason: string;
+  groupId?: string | null;
+  groupName?: string | null;
+  lastLessonDate?: string | null;
+}
+
 export const teacherApi = {
   getStats: () => api.get<TeacherStats>("/teacher/stats"),
+
+  getLowBalanceNotifications: () =>
+    api.get<{ items: LowBalanceNotification[]; unread_count: number }>("/teacher/notifications/low-balance"),
+  
+  getNotifications: () =>
+    api.get<{ notifications: Notification[]; unread_count: number }>("/teacher/notifications/"),
+  
+  getNotificationsCount: () =>
+    api.get<{ count: number }>("/teacher/notifications/count/"),
+  
+  markNotificationRead: (notificationId: number) =>
+    api.post(`/teacher/notifications/${notificationId}/read/`),
   
   getStudents: (status?: "active" | "deleted") => {
     const params = status ? `?status=${status}` : "";
@@ -74,7 +139,8 @@ export const teacherApi = {
   
   getGroups: () => api.get<Group[]>("/teacher/groups"),
   
-  createGroup: (name: string) => api.post<Group>("/teacher/groups", { name }),
+  createGroup: (data: { name: string; lesson_days?: number[]; start_time?: string | null; display_name?: string | null; display_name_is_manual?: boolean; monthly_fee?: number | null; monthly_lessons_count?: number }) =>
+    api.post<Group>("/teacher/groups", data),
   
   updateGroup: (id: string, data: Partial<Group>) =>
     api.patch<Group>(`/teacher/groups/${id}`, data),
@@ -125,13 +191,40 @@ export const teacherApi = {
   }) => api.post("/teacher/attendance/update", data),
 
   // New attendance endpoints
+  getAttendanceGridNew: (params: { groupId: string; from: string; to: string }) => {
+    const sp = new URLSearchParams();
+    sp.set("groupId", params.groupId);
+    sp.set("from", params.from);
+    sp.set("to", params.to);
+    return api.get<AttendanceGridNew>(`/teacher/attendance/grid?${sp.toString()}`);
+  },
+  bulkUpsertAttendance: (data: {
+    groupId: string;
+    items: { studentId: string; date: string; status: AttendanceStatus }[];
+  }) => api.post<{ saved: number; items: { studentId: string; date: string; status: string }[] }>("/teacher/attendance/bulk-upsert", data),
+  bulkDeleteAttendance: (data: {
+    groupId: string;
+    items: { studentId: string; date: string }[];
+  }) => api.post<{ deleted: number }>("/teacher/attendance/bulk-delete", data),
+  getAttendanceMonthlyNew: (params: { groupId: string; month: string }) => {
+    const sp = new URLSearchParams();
+    sp.set("groupId", params.groupId);
+    sp.set("month", params.month);
+    return api.get<AttendanceMonthlyNew>(`/teacher/attendance/monthly?${sp.toString()}`);
+  },
+  markAllPresentForDate: (data: { groupId: string; date: string }) =>
+    api.post<{ saved: number; items: { student_id: string; date: string; status: string }[] }>(
+      "/teacher/attendance/mark-all-present",
+      data
+    ),
   getAttendanceDaily: (groupId: string, date: string) =>
     api.get<AttendanceDaily>(`/teacher/attendance/group/${groupId}/daily?date=${date}`),
   saveAttendance: (data: {
     date: string;
     groupId: string;
     records: { studentId: string; status: "present" | "absent" | "late" | "excused" }[];
-  }) => api.post<{ saved: number; message: string }>("/teacher/attendance/save", data),
+    finalize?: boolean;
+  }) => api.post<{ ok: boolean; date: string; groupId: string; saved: boolean; charged: boolean; charged_count: number; delivered_marked: boolean; charged_students?: Array<{studentId: string; oldBalance: number; newBalance: number; chargeAmount: number}>; message: string }>("/teacher/attendance/save", data),
   getAttendanceMonthly: (groupId: string, year: number, month: number) =>
     api.get<AttendanceMonthly>(
       `/teacher/attendance/group/${groupId}/monthly?year=${year}&month=${month}`
@@ -150,6 +243,10 @@ export const teacherApi = {
     }>(
       `/teacher/attendance/group/${groupId}/student/${studentId}/daily?year=${year}&month=${month}`
     ),
+  finalizeLesson: (data: { groupId: string; date: string }) =>
+    api.post<{ ok: boolean; lesson_finalized: boolean; students_charged: number; charge_details: Array<{studentId: string; oldBalance: number; newBalance: number; chargeAmount: number}>; message: string }>("/teacher/lessons/finalize", data),
+  unlockLesson: (data: { groupId: string; date: string }) =>
+    api.post<{ ok: boolean; message: string }>("/teacher/lessons/unlock", data),
 
   // Groups - students in group
   getGroupStudents: (groupId: string) =>
@@ -384,6 +481,9 @@ export const teacherApi = {
   hardDeleteQuestion: (id: number) => api.delete(`/teacher/questions/${id}/hard-delete`),
   restorePdf: (id: number) => api.post<{ id: number; message: string }>(`/teacher/pdfs/${id}/restore`, {}),
   hardDeletePdf: (id: number) => api.delete(`/teacher/pdfs/${id}/hard-delete`),
+  bulkDeleteExams: (ids: number[]) => api.post<{ deleted: number; message: string }>(`/teacher/archive/exams/bulk-delete`, { ids }),
+  bulkDeleteQuestions: (ids: number[]) => api.post<{ deleted: number; message: string }>(`/teacher/archive/questions/bulk-delete`, { ids }),
+  bulkDeletePdfs: (ids: number[]) => api.post<{ deleted: number; message: string }>(`/teacher/archive/pdfs/bulk-delete`, { ids }),
   getExamDetail: (id: number) => api.get<ExamDetail>(`/teacher/exams/${id}`),
   createExamRun: (examId: number, data: { groupId?: number; studentId?: number; duration_minutes: number; start_now?: boolean }) =>
     api.post<{ runId: number; start_at: string; end_at: string; duration_minutes: number }>(`/teacher/exams/${examId}/create-run`, data),
@@ -393,16 +493,29 @@ export const teacherApi = {
   addExamQuestion: (examId: number, questionId: number) => api.post(`/teacher/exams/${examId}/questions`, { question_id: questionId }),
   removeExamQuestion: (examId: number, questionId: number) => api.delete(`/teacher/exams/${examId}/questions/${questionId}`),
   assignExamToGroups: (examId: number, groupIds: number[]) => api.post(`/teacher/exams/${examId}/assign`, { groupIds }),
-  startExamNow: (examId: number, data: { groupIds?: number[]; studentId?: number; durationMinutes: number }) =>
+  startExamNow: (examId: number, data: { groupIds?: number[]; studentId?: number; durationMinutes: number; startTime?: string }) =>
     api.post(`/teacher/exams/${examId}/start-now`, data),
   stopExam: (examId: number) => api.post(`/teacher/exams/${examId}/stop`),
+  updateRun: (runId: number, data: { duration_minutes: number }) => api.patch(`/teacher/runs/${runId}`, data),
   getExamAttempts: (examId: number, params?: { groupId?: string; status?: string; showArchived?: boolean }) => {
     const sp = new URLSearchParams();
     if (params?.groupId) sp.set("groupId", params.groupId);
     if (params?.status) sp.set("status", params.status);
     if (params?.showArchived) sp.set("showArchived", "true");
     const qs = sp.toString();
-    return api.get<{ attempts: ExamAttempt[] }>(`/teacher/exams/${examId}/attempts${qs ? `?${qs}` : ""}`);
+    return api.get<{ attempts?: ExamAttempt[]; runs?: Array<{
+      runId: number;
+      examId: number;
+      examTitle: string;
+      groupName?: string | null;
+      studentName?: string | null;
+      startAt: string;
+      endAt: string;
+      durationMinutes: number;
+      status: string;
+      attemptCount: number;
+      attempts: ExamAttempt[];
+    }> }>(`/teacher/exams/${examId}/attempts${qs ? `?${qs}` : ""}`);
   },
   examAttemptsCleanup: (examId: number, data: { scope: "exam" | "group" | "student"; group_id?: number; student_id?: number; only_unpublished?: boolean }) =>
     api.post<{ archived: number; message: string }>(`/teacher/exams/${examId}/attempts/cleanup`, data),
@@ -493,6 +606,48 @@ export const teacherApi = {
     }>("/teacher/bulk-import/confirm", { rows });
   },
 
+  // Bulk import users (new format: fullName, grade, studentEmail, parentEmail, password)
+  bulkImportUsers: (data: { file?: File; csvText?: string }) => {
+    if (data.file) {
+      const formData = new FormData();
+      formData.append("file", data.file);
+      return api.post<{
+        created: number;
+        skipped: number;
+        errors: { row: number; field: string; message: string }[];
+        credentials: { fullName: string; studentEmail: string; parentEmail: string; password: string }[];
+      }>("/teacher/bulk-import/users", formData);
+    }
+    return api.post<{
+      created: number;
+      skipped: number;
+      errors: { row: number; field: string; message: string }[];
+      credentials: { fullName: string; studentEmail: string; parentEmail: string; password: string }[];
+    }>("/teacher/bulk-import/users", { csvText: data.csvText });
+  },
+  getBulkImportTemplate: async () => {
+    const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api"}/teacher/bulk-import/template-csv`, {
+      credentials: "include",
+      headers: { Cookie: document.cookie },
+    });
+    if (!res.ok) throw new Error("Template yüklənə bilmədi");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "bulk_import_template.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+  userRevealPassword: (userId: string) =>
+    api.post<{ password: string; revealed: boolean; message?: string }>(
+      `/teacher/users/${userId}/reveal-password`
+    ),
+  userResetPassword: (userId: string) =>
+    api.post<{ password: string; message?: string }>(
+      `/teacher/users/${userId}/reset-password`
+    ),
+
   // Credentials registry (imported account credentials)
   getCredentials: (params?: { groupId?: string; search?: string; page?: number; pageSize?: number }) => {
     const sp = new URLSearchParams();
@@ -578,6 +733,28 @@ export interface AttendanceGrid {
       email: string;
       records: Record<string, "present" | "absent" | "late" | "excused" | null>;
     }[];
+  }[];
+}
+
+export interface AttendanceGridNew {
+  dates: string[];
+  students: { id: string; full_name: string }[];
+  records: { student_id: string; date: string; status: AttendanceStatus }[];
+}
+
+export interface AttendanceMonthlyNew {
+  month: string;
+  dates: string[];
+  students: { id: string; full_name: string }[];
+  records: { student_id: string; date: string; status: AttendanceStatus }[];
+  stats: {
+    student_id: string;
+    present: number;
+    late: number;
+    absent: number;
+    excused: number;
+    missed_count: number;
+    missed_percent: number;
   }[];
 }
 
@@ -710,6 +887,8 @@ export interface ExamDetail extends ExamListItem {
   pdf_url?: string | null;
   has_answer_key?: boolean;
   question_counts?: { closed: number; open: number; situation: number; total: number } | null;
+  /** Teacher-only: Cavab vərəqi panel (PDF/JSON) */
+  answer_key_preview?: { number?: number; kind: string; correct?: string; open_answer?: string }[] | null;
   runs?: ExamRunItem[];
 }
 
@@ -752,26 +931,36 @@ export interface ExamAttemptDetail {
   attemptId: number;
   examId: number;
   examTitle: string;
-  sourceType?: string;
+  sourceType: "BANK" | "PDF" | "JSON";
   studentId: number;
   studentName: string;
+  runId?: number | null;
+  pdfUrl?: string | null;
   startedAt: string;
-  finishedAt?: string;
+  finishedAt?: string | null;
   autoScore: number;
-  manualScore?: number;
+  manualScore?: number | null;
   maxScore: number;
-  answers: {
+  attemptBlueprint?: Array<{ questionNumber?: number; questionId?: number; kind: string; options?: Array<{ id: string; text: string }>; correctOptionId?: string }> | null;
+  answers: Array<{
     id: number;
     questionId?: number | null;
-    questionNumber?: number;
+    questionNumber?: number | null;
     questionText: string;
     questionType: string;
-    selectedOptionId?: number;
-    selectedOptionKey?: string;
-    textAnswer?: string;
+    selectedOptionId?: number | null;
+    selectedOptionKey?: string | null;
+    textAnswer?: string | null;
     autoScore: number;
     requiresManualCheck: boolean;
-    manualScore?: number;
-  }[];
-  canvases?: { canvasId: number; questionId?: number; situationIndex?: number; imageUrl: string | null; updatedAt: string }[];
+    manualScore?: number | null;
+  }>;
+  canvases?: Array<{
+    canvasId: number;
+    questionId?: number | null;
+    situationIndex?: number | null;
+    imageUrl?: string | null;
+    updatedAt: string;
+  }>;
+  situationScoringSet?: "SET1" | "SET2";
 }

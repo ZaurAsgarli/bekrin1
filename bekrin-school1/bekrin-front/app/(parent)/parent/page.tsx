@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { parentApi, Child } from "@/lib/parent";
 import { Loading } from "@/components/Loading";
 import { Modal } from "@/components/Modal";
+import { formatPaymentDisplay } from "@/lib/formatPayment";
 import { CalendarCheck, CreditCard, FileText } from "lucide-react";
 
 export default function ParentDashboard() {
@@ -57,7 +58,7 @@ export default function ParentDashboard() {
   };
 
   return (
-    <div className="page-container">
+    <div className="page-container w-full min-w-0 overflow-x-hidden">
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-slate-900 mb-2">
           Valideyn Paneli
@@ -68,24 +69,30 @@ export default function ParentDashboard() {
       </div>
 
       {children && children.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full min-w-0">
           {children.map((child) => (
-            <div key={child.id} className="card hover:shadow-lg transition-all">
-              <div className="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
-                <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-xl font-semibold">
+            <div key={child.id} className="card hover:shadow-lg transition-all min-w-0 flex flex-col">
+              <div className="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200 min-w-0">
+                <div className="flex-shrink-0 w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-lg sm:text-xl font-semibold">
                   {child.fullName.charAt(0).toUpperCase()}
                 </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-slate-900">
+                <div className="min-w-0 flex-1">
+                  <h3
+                    className="text-lg font-semibold text-slate-900 truncate"
+                    title={child.fullName}
+                  >
                     {child.fullName}
                   </h3>
-                  <p className="text-sm text-slate-600">
+                  <p
+                    className="text-sm text-slate-600 truncate"
+                    title={child.class ? `Sinif: ${child.class}` : "-"}
+                  >
                     {child.class ? `Sinif: ${child.class}` : "-"}
                   </p>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 mb-6">
+              <div className="grid grid-cols-2 gap-3 sm:gap-4 mb-6">
                 <div className="bg-slate-50 rounded-lg p-4">
                   <p className="text-xs text-slate-600 mb-1">Davamiyyət %</p>
                   <p className="text-2xl font-bold text-slate-900">
@@ -97,7 +104,7 @@ export default function ParentDashboard() {
                 <div className="bg-slate-50 rounded-lg p-4">
                   <p className="text-xs text-slate-600 mb-1">Balans</p>
                   <p className="text-2xl font-bold text-slate-900">
-                    {child.balance.toFixed(2)} ₼
+                    {formatPaymentDisplay(child.balance, "parent")} ₼
                   </p>
                 </div>
                 <div className="bg-slate-50 rounded-lg p-4">
@@ -123,30 +130,30 @@ export default function ParentDashboard() {
                 </div>
               </div>
 
-              <div className="flex gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-auto">
                 <a
                   href={`/parent/attendance?studentId=${child.id}`}
-                  className="flex-1 btn-outline text-center"
+                  className="btn-outline text-center text-sm py-2 px-3 min-w-0 overflow-hidden"
                 >
-                  <CalendarCheck className="w-4 h-4 inline mr-2" />
-                  Davamiyyət
+                  <CalendarCheck className="w-4 h-4 inline mr-1.5 sm:mr-2 shrink-0" />
+                  <span className="truncate">Davamiyyət</span>
                 </a>
                 <button
                   onClick={() => handlePaymentsClick(child)}
-                  className="flex-1 btn-outline"
+                  className="btn-outline text-center text-sm py-2 px-3 min-w-0 overflow-hidden"
                 >
-                  <CreditCard className="w-4 h-4 inline mr-2" />
-                  Ödənişlər
+                  <CreditCard className="w-4 h-4 inline mr-1.5 sm:mr-2 shrink-0" />
+                  <span className="truncate">Ödənişlər</span>
                 </button>
                 <button
                   onClick={() => {
                     setTestsChildId(child.id);
                     setShowTestsModal(true);
                   }}
-                  className="flex-1 btn-outline"
+                  className="btn-outline text-center text-sm py-2 px-3 min-w-0 overflow-hidden"
                 >
-                  <FileText className="w-4 h-4 inline mr-2" />
-                  Testlər
+                  <FileText className="w-4 h-4 inline mr-1.5 sm:mr-2 shrink-0" />
+                  <span className="truncate">Testlər</span>
                 </button>
                 <button
                   onClick={() => {
@@ -154,10 +161,10 @@ export default function ParentDashboard() {
                     setShowExamsModal(true);
                     setSelectedExamAttempt(null);
                   }}
-                  className="flex-1 btn-outline"
+                  className="btn-outline text-center text-sm py-2 px-3 min-w-0 overflow-hidden"
                 >
-                  <FileText className="w-4 h-4 inline mr-2" />
-                  İmtahanlar
+                  <FileText className="w-4 h-4 inline mr-1.5 sm:mr-2 shrink-0" />
+                  <span className="truncate">İmtahanlar</span>
                 </button>
               </div>
             </div>
@@ -305,6 +312,9 @@ export default function ParentDashboard() {
               <thead>
                 <tr className="border-b border-slate-200">
                   <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">
+                    Ödəniş
+                  </th>
+                  <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">
                     Tarix
                   </th>
                   <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">
@@ -319,16 +329,25 @@ export default function ParentDashboard() {
                 </tr>
               </thead>
               <tbody>
-                {payments.map((payment) => (
+                {[...payments]
+                  .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                  .map((payment, i) => {
+                    const n = i + 1;
+                    const suf: Record<number, string> = { 1: "ci", 2: "ci", 3: "cü", 4: "cü", 5: "ci", 6: "cı", 7: "ci", 8: "ci", 9: "cu", 0: "cu" };
+                    const ord = `${n}-${suf[n % 10] ?? "ci"} ödəniş`;
+                    return (
                   <tr
                     key={payment.id}
                     className="border-b border-slate-100 hover:bg-slate-50"
                   >
+                    <td className="py-3 px-4 text-sm font-medium text-slate-900">
+                      {ord}
+                    </td>
                     <td className="py-3 px-4 text-sm text-slate-600">
                       {new Date(payment.date).toLocaleDateString("az-AZ")}
                     </td>
                     <td className="py-3 px-4 text-sm font-medium text-slate-900">
-                      {payment.amount.toFixed(2)} ₼
+                      {formatPaymentDisplay(payment.amount, "parent")} ₼
                     </td>
                     <td className="py-3 px-4 text-sm text-slate-600">
                       {payment.method === "cash"
@@ -349,7 +368,7 @@ export default function ParentDashboard() {
                       </span>
                     </td>
                   </tr>
-                ))}
+                );})}
               </tbody>
             </table>
           </div>

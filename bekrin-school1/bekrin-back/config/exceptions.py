@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.http import Http404
 from django.core.exceptions import PermissionDenied, ValidationError as DjangoValidationError
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +40,13 @@ def custom_exception_handler(exc, context):
         )
 
     logger.exception('Unhandled exception: %s', exc)
+    # In DEBUG mode, include more details for troubleshooting
+    error_detail = 'An internal error occurred.'
+    if settings.DEBUG:
+        error_detail = f'An internal error occurred: {str(exc)}'
     # Never expose stack traces to frontend; use standard API error format
     return Response(
-        {'detail': 'An internal error occurred.', 'code': 'internal_error'},
+        {'detail': error_detail, 'code': 'internal_error'},
         status=status.HTTP_500_INTERNAL_SERVER_ERROR
     )
 

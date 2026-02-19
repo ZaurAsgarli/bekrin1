@@ -1,6 +1,8 @@
 """
 Answer key JSON validation for PDF/JSON exam sources.
 Enforces composition: QUIZ 12 closed + 3 open; EXAM 22 closed + 5 open + 3 situations.
+Accepts user format: no, qtype (closed|open|situation), options as strings, correct as index, answer.
+Normalizes to internal: number, kind (mc|open|situation), options as [{key, text}], correct as key, open_answer.
 """
 from typing import Any
 
@@ -16,11 +18,98 @@ EXAM_SITUATION = 3
 
 OPEN_RULES = {'EXACT_MATCH', 'ORDERED_MATCH', 'UNORDERED_MATCH', 'NUMERIC_EQUAL', 'ORDERED_DIGITS', 'UNORDERED_DIGITS'}
 QUESTION_KINDS = {'mc', 'open', 'situation'}
+QTYPE_TO_KIND = {'closed': 'mc', 'open': 'open', 'situation': 'situation'}
+OPTION_KEYS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+
+
+def normalize_answer_key_json(data: Any) -> dict[str, Any] | None:
+    """
+    Accept user-facing format (no, qtype, options as strings, correct as index, answer)
+    and return normalized internal format (number, kind, options as [{key, text}], correct as key, open_answer).
+    Returns None if invalid or not in user format (caller can use data as-is if already internal).
+    """
+    if not isinstance(data, dict):
+        return None
+    questions = data.get('questions')
+    if not isinstance(questions, list):
+        return None
+    exam_type = data.get('type')
+    if exam_type not in ('quiz', 'exam'):
+        return None
+    out_questions = []
+    for i, q in enumerate(questions):
+        if not isinstance(q, dict):
+            return None
+        num = q.get('number') if q.get('number') is not None else q.get('no')
+        if num is None:
+            return None
+        qtype = (q.get('qtype') or '').strip().lower()
+        kind = q.get('kind') or (QTYPE_TO_KIND.get(qtype) if qtype else None)
+        if not kind:
+            kind = 'mc' if qtype == 'closed' else ('open' if qtype == 'open' else 'situation')
+        kind = kind.strip().lower()
+        if kind not in QUESTION_KINDS:
+            return None
+        item = {'number': int(num) if isinstance(num, (int, float)) else num, 'kind': kind}
+        if kind == 'mc':
+            opts = q.get('options')
+            if isinstance(opts, list):
+                option_list = []
+                for j, o in enumerate(opts):
+                    if isinstance(o, dict):
+                        key = str(o.get('key', OPTION_KEYS[j] if j < len(OPTION_KEYS) else str(j))).strip().upper()
+                        text = o.get('text', '')
+                    else:
+                        key = OPTION_KEYS[j] if j < len(OPTION_KEYS) else str(chr(65 + j))
+                        text = str(o) if o is not None else ''
+                    option_list.append({'key': key, 'text': text})
+                item['options'] = option_list
+                correct = q.get('correct')
+                if correct is not None:
+                    idx = int(correct) if isinstance(correct, (int, float)) else None
+                    if idx is not None and 0 <= idx < len(option_list):
+                        item['correct'] = option_list[idx]['key']
+                    elif isinstance(correct, str) and correct.strip():
+                        item['correct'] = correct.strip().upper()
+                else:
+                    item['correct'] = None
+            else:
+                item['options'] = []
+                item['correct'] = None
+        elif kind == 'open':
+            item['options'] = []
+            item['open_answer'] = q.get('open_answer') if q.get('open_answer') is not None else q.get('answer')
+            if q.get('open_rule'):
+                item['open_rule'] = (q.get('open_rule') or '').strip().upper()
+        else:
+            item['options'] = []
+            if q.get('prompt') is not None:
+                item['prompt'] = q.get('prompt')
+            if q.get('max_multiplier') is not None:
+                item['max_multiplier'] = q.get('max_multiplier')
+        out_questions.append(item)
+    extra = {k: v for k, v in data.items() if k not in ('questions', 'type')}
+    return {'type': exam_type, 'questions': out_questions, **extra}
+
+
+def validate_and_normalize_answer_key_json(data: Any) -> tuple[bool, list[str], dict[str, Any] | None]:
+    """
+    Normalize user format (no, qtype, options strings, correct index, answer) if present,
+    then validate. Returns (is_valid, errors, normalized_data or None).
+    """
+    if not isinstance(data, dict):
+        return False, ['answer_key must be an object'], None
+    normalized = normalize_answer_key_json(data)
+    if normalized is not None:
+        data = normalized
+    is_valid, errors = validate_answer_key_json(data)
+    return is_valid, errors, (data if is_valid else None)
 
 
 def validate_answer_key_json(data: Any) -> tuple[bool, list[str]]:
     """
-    Validate answer key JSON. Returns (is_valid, list of error messages).
+    Validate answer key JSON (internal format: number, kind, options as [{key, text}], correct as key).
+    Returns (is_valid, list of error messages).
     """
     errors = []
     if not isinstance(data, dict):

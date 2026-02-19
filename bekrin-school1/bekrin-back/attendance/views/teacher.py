@@ -4,6 +4,8 @@ Endpoints:
 - GET  /attendance/group/{group_id}/daily?date=      Daily view: students + status for date
 - POST /attendance/save                              Bulk save attendance
 - GET  /attendance/group/{group_id}/monthly?month=&year=  Monthly stats per student
+- GET  /attendance/grid?groupId=&from=&to=           Lesson-dates grid (dates from group.lesson_days)
+- POST /attendance/bulk-upsert                       Bulk upsert attendance records
 """
 from calendar import monthrange
 from datetime import date, datetime, timedelta
@@ -15,14 +17,51 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import IsTeacher
 from core.utils import filter_by_organization, belongs_to_user_organization
+import logging
 from groups.models import Group
 from groups.services import get_active_students_for_group
 from students.models import StudentProfile
 from attendance.models import AttendanceRecord
+from attendance.services.lesson_charge import maybe_open_session_and_charge
+from attendance.services.lesson_finalize import finalize_lesson_and_charge
+from attendance.models import LessonHeld
+
+logger = logging.getLogger(__name__)
 
 
 VALID_STATUSES = {"present", "absent", "late", "excused"}
 DEFAULT_STATUS = "present"
+
+
+def _lesson_dates_in_range(from_date, to_date, days_of_week):
+    """
+    Return list of dates in [from_date, to_date] whose weekday matches days_of_week.
+    days_of_week: [1..7] with 1=Mon, 7=Sun.
+    Python weekday: 0=Mon, 6=Sun => our N = weekday + 1.
+    Returns dates in descending order (newest first).
+    """
+    if not days_of_week:
+        return []
+    valid = set(int(d) for d in days_of_week if 1 <= int(d) <= 7)
+    if not valid:
+        return []
+    result = []
+    d = to_date
+    while d >= from_date:
+        our_day = d.weekday() + 1
+        if our_day in valid:
+            result.append(d)
+        d -= timedelta(days=1)
+    return result
+
+
+def _lesson_dates_in_month(year, month, days_of_week):
+    """Return lesson dates in month (ascending order)."""
+    _, last_day = monthrange(year, month)
+    start_date = date(year, month, 1)
+    end_date = date(year, month, last_day)
+    dates_desc = _lesson_dates_in_range(start_date, end_date, days_of_week)
+    return list(reversed(dates_desc))
 
 
 @api_view(["GET"])
@@ -87,12 +126,14 @@ def attendance_group_daily_view(request, group_id):
 def attendance_save_view(request):
     """
     POST /api/teacher/attendance/save
-    Body: { date: "YYYY-MM-DD", groupId: "…", records: [{ studentId, status }] }
+    Body: { date: "YYYY-MM-DD", groupId: "…", records: [{ studentId, status }], finalize: true/false }
     Creates or updates attendance in transaction.
+    If finalize=true, finalizes the lesson and charges students (idempotent).
     """
     date_str = request.data.get("date")
     group_id = request.data.get("groupId")
     records_data = request.data.get("records", [])
+    finalize = request.data.get("finalize", False)
 
     if not date_str or not group_id:
         return Response(
@@ -113,6 +154,19 @@ def attendance_save_view(request):
         return Response({"detail": "Group not found"}, status=status.HTTP_404_NOT_FOUND)
     if not belongs_to_user_organization(group, request.user):
         return Response({"detail": "Access denied"}, status=status.HTTP_403_FORBIDDEN)
+    
+    # Check if lesson is finalized (locked) - prevent editing unless unlock is requested
+    unlock = request.data.get("unlock", False)
+    try:
+        lesson_held = LessonHeld.objects.get(group=group, date=target_date)
+        if lesson_held.is_finalized and not unlock:
+            return Response({
+                "ok": False,
+                "detail": "Dərs tamamlanıb və kilidləndi. Redaktə etmək üçün kilidi açın.",
+                "is_finalized": True
+            }, status=status.HTTP_400_BAD_REQUEST)
+    except LessonHeld.DoesNotExist:
+        pass  # Lesson not finalized yet, allow editing
 
     with transaction.atomic():
         saved = 0
@@ -143,7 +197,54 @@ def attendance_save_view(request):
             )
             saved += 1
 
-    return Response({"saved": saved, "message": "Davamiyyət saxlanıldı"})
+        # If finalize=true, finalize lesson and charge (idempotent)
+        lesson_finalized = False
+        students_charged = 0
+        charge_details = []
+        
+        if finalize:
+            logger.info(f"[ATTENDANCE_SAVE] Finalize requested: saved={saved}, group_id={group.id}, date={target_date}")
+            if not saved:
+                logger.warning(f"[ATTENDANCE_SAVE] Finalize requested but no attendance records saved")
+            
+            try:
+                lesson_finalized, students_charged, charge_details = finalize_lesson_and_charge(
+                    group, target_date, created_by=request.user
+                )
+                
+                logger.info(f"[ATTENDANCE_SAVE] Finalize result: lesson_finalized={lesson_finalized}, students_charged={students_charged}, charge_details_count={len(charge_details)}")
+                
+                # Log each charge detail
+                for detail in charge_details:
+                    logger.info(f"[ATTENDANCE_SAVE] Charge detail: studentId={detail['studentId']}, oldBalance={detail['oldBalance']}, newBalance={detail['newBalance']}, chargeAmount={detail['chargeAmount']}")
+            except Exception as e:
+                logger.error(f"[ATTENDANCE_SAVE] Error in finalize_lesson_and_charge: {e}", exc_info=True)
+                # Don't fail the request, but log error and set defaults
+                import traceback
+                logger.error(f"[ATTENDANCE_SAVE] Full traceback: {traceback.format_exc()}")
+                # Set defaults to prevent response errors
+                lesson_finalized = False
+                students_charged = 0
+                charge_details = []
+
+    # Build response with proof fields (PART 0 requirement)
+    response_data = {
+        "ok": True,
+        "date": target_date.isoformat(),
+        "groupId": str(group.id),
+        "saved": saved > 0,
+        "charged": lesson_finalized,
+        "charged_count": students_charged,
+        "delivered_marked": lesson_finalized,
+        "message": "Davamiyyət saxlanıldı" + (" və dərs yekunlaşdırıldı" if lesson_finalized else ""),
+    }
+    
+    # Add charge details (proof fields)
+    if charge_details:
+        response_data["charged_students"] = charge_details
+    
+    logger.info(f"[ATTENDANCE_SAVE] Response: {response_data}")
+    return Response(response_data)
 
 
 @api_view(["GET"])
@@ -395,8 +496,503 @@ def teacher_attendance_update_view(request):
             "organization": request.user.organization,
         },
     )
+    try:
+        maybe_open_session_and_charge(group, target_date)
+    except Exception as e:
+        logger.error(f"Error in maybe_open_session_and_charge: {e}", exc_info=True)
     from attendance.serializers import AttendanceRecordSerializer
     return Response(
         AttendanceRecordSerializer(record).data,
         status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
     )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsTeacher])
+def attendance_grid_new_view(request):
+    """
+    GET /api/teacher/attendance/grid?groupId=&from=YYYY-MM-DD&to=YYYY-MM-DD
+    Returns lesson dates (from group.lesson_days), students, and records.
+    Null-safe; never 500; empty records allowed.
+    """
+    group_id = request.query_params.get("groupId")
+    from_str = request.query_params.get("from")
+    to_str = request.query_params.get("to")
+
+    if not group_id:
+        return Response(
+            {"dates": [], "students": [], "records": []},
+            status=status.HTTP_200_OK,
+        )
+
+    try:
+        group = Group.objects.get(id=group_id)
+    except (Group.DoesNotExist, ValueError, TypeError):
+        return Response(
+            {"dates": [], "students": [], "records": []},
+            status=status.HTTP_200_OK,
+        )
+
+    if not belongs_to_user_organization(group, request.user):
+        return Response(
+            {"dates": [], "students": [], "records": []},
+            status=status.HTTP_200_OK,
+        )
+
+    today = date.today()
+    try:
+        from_date = datetime.strptime((from_str or "")[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        from_date = today - timedelta(days=60)
+    try:
+        to_date = datetime.strptime((to_str or "")[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        to_date = today
+
+    if from_date > to_date:
+        from_date, to_date = to_date, from_date
+
+    days_of_week = getattr(group, "days_of_week", None) or []
+    dates_list = _lesson_dates_in_range(from_date, to_date, days_of_week)
+
+    memberships = get_active_students_for_group(group)
+    students = [
+        {"id": str(m.student_profile.id), "full_name": m.student_profile.user.full_name}
+        for m in memberships
+        if not m.student_profile.is_deleted
+    ]
+
+    if not students or not dates_list:
+        return Response(
+            {
+                "dates": [d.isoformat() for d in dates_list],
+                "students": students,
+                "records": [],
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    student_ids = [int(s["id"]) for s in students]
+    records_qs = AttendanceRecord.objects.filter(
+        student_profile_id__in=student_ids,
+        lesson_date__gte=from_date,
+        lesson_date__lte=to_date,
+    ).values_list("student_profile_id", "lesson_date", "status")
+
+    records = [
+        {
+            "student_id": str(sid),
+            "date": d.isoformat(),
+            "status": st,
+        }
+        for sid, d, st in records_qs
+    ]
+
+    return Response(
+        {
+            "dates": [d.isoformat() for d in dates_list],
+            "students": students,
+            "records": records,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsTeacher])
+def attendance_bulk_upsert_view(request):
+    """
+    POST /api/teacher/attendance/bulk-upsert
+    Body: { groupId: X, items: [{ studentId, date, status }, ...] }
+    Upsert (create or update) each record. Return saved count.
+    """
+    group_id = request.data.get("groupId")
+    items = request.data.get("items", [])
+
+    if not group_id:
+        return Response(
+            {"detail": "groupId is required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not isinstance(items, list):
+        return Response(
+            {"detail": "items must be an array"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        group = Group.objects.get(id=group_id)
+    except (Group.DoesNotExist, ValueError, TypeError):
+        return Response({"detail": "Group not found"}, status=status.HTTP_404_NOT_FOUND)
+    if not belongs_to_user_organization(group, request.user):
+        return Response({"detail": "Access denied"}, status=status.HTTP_403_FORBIDDEN)
+
+    saved = []
+    dates_touched = set()
+    with transaction.atomic():
+        for item in items:
+            student_id = item.get("studentId")
+            date_str = item.get("date")
+            status_val = item.get("status", DEFAULT_STATUS)
+            if not student_id or not date_str or status_val not in VALID_STATUSES:
+                continue
+            try:
+                target_date = datetime.strptime(str(date_str)[:10], "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                continue
+            try:
+                student = StudentProfile.objects.get(id=student_id, is_deleted=False)
+            except StudentProfile.DoesNotExist:
+                continue
+            if not belongs_to_user_organization(student.user, request.user, "organization"):
+                continue
+
+            AttendanceRecord.objects.update_or_create(
+                student_profile=student,
+                lesson_date=target_date,
+                defaults={
+                    "status": status_val,
+                    "group": group,
+                    "organization": request.user.organization,
+                    "marked_by": request.user,
+                    "marked_at": timezone.now(),
+                },
+            )
+            saved.append({"studentId": str(student_id), "date": target_date.isoformat(), "status": status_val})
+            dates_touched.add((group.id, target_date))
+
+        for gid, d in dates_touched:
+            try:
+                g = Group.objects.get(id=gid)
+                maybe_open_session_and_charge(g, d)
+            except (ValueError, TypeError, Group.DoesNotExist) as e:
+                logger.warning(f"Error charging for group {gid}, date {d}: {e}")
+            except Exception as e:
+                logger.error(f"Unexpected error in maybe_open_session_and_charge: {e}", exc_info=True)
+    return Response({"saved": len(saved), "items": saved}, status=status.HTTP_200_OK)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated, IsTeacher])
+def attendance_monthly_new_view(request):
+    """
+    GET /api/teacher/attendance/monthly?groupId=&month=YYYY-MM
+    Returns monthly view with lesson-days-only dates, students, records, stats.
+    """
+    group_id = request.query_params.get("groupId")
+    month_str = request.query_params.get("month", "")
+
+    if not group_id:
+        return Response(
+            {"month": "", "dates": [], "students": [], "records": [], "stats": []},
+            status=status.HTTP_200_OK,
+        )
+
+    try:
+        group = Group.objects.get(id=group_id)
+    except (Group.DoesNotExist, ValueError, TypeError):
+        return Response(
+            {"month": month_str, "dates": [], "students": [], "records": [], "stats": []},
+            status=status.HTTP_200_OK,
+        )
+
+    if not belongs_to_user_organization(group, request.user):
+        return Response(
+            {"month": month_str, "dates": [], "students": [], "records": [], "stats": []},
+            status=status.HTTP_200_OK,
+        )
+
+    try:
+        parts = month_str.strip().split("-")
+        year = int(parts[0])
+        month = int(parts[1])
+    except (ValueError, IndexError, TypeError):
+        today = date.today()
+        year = today.year
+        month = today.month
+        month_str = f"{year}-{month:02d}"
+
+    days_of_week = getattr(group, "days_of_week", None) or []
+    dates_list = _lesson_dates_in_month(year, month, days_of_week)
+
+    memberships = get_active_students_for_group(group)
+    students = [
+        {"id": str(m.student_profile.id), "full_name": m.student_profile.user.full_name}
+        for m in memberships
+        if not m.student_profile.is_deleted
+    ]
+
+    if not students:
+        return Response(
+            {
+                "month": month_str,
+                "dates": [d.isoformat() for d in dates_list],
+                "students": [],
+                "records": [],
+                "stats": [],
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    student_ids = [s["id"] for s in students]
+    sid_int = [int(x) for x in student_ids]
+    start_date = date(year, month, 1)
+    _, last_day = monthrange(year, month)
+    end_date = date(year, month, last_day)
+
+    records_qs = AttendanceRecord.objects.filter(
+        student_profile_id__in=sid_int,
+        lesson_date__gte=start_date,
+        lesson_date__lte=end_date,
+    ).values_list("student_profile_id", "lesson_date", "status")
+
+    records = [
+        {"student_id": str(sid), "date": d.isoformat(), "status": st}
+        for sid, d, st in records_qs
+    ]
+
+    from django.db.models import Count
+    lesson_date_set = {d for d in dates_list}
+    rec_counts = (
+        AttendanceRecord.objects.filter(
+            student_profile_id__in=sid_int,
+            lesson_date__in=lesson_date_set,
+        )
+        .values("student_profile", "status")
+        .annotate(cnt=Count("id"))
+    )
+
+    stats_map = {}
+    for r in rec_counts:
+        sid = r["student_profile"]
+        if sid not in stats_map:
+            stats_map[sid] = {"present": 0, "late": 0, "absent": 0, "excused": 0}
+        stats_map[sid][r["status"]] = r["cnt"]
+
+    total_lesson_days = len(dates_list)
+    stats = []
+    for sp_id in sid_int:
+        s = stats_map.get(sp_id, {"present": 0, "late": 0, "absent": 0, "excused": 0})
+        total = s["present"] + s["late"] + s["absent"] + s["excused"]
+        missed = total_lesson_days - total
+        missed_percent = round((missed / total_lesson_days * 100), 1) if total_lesson_days > 0 else 0
+        stats.append({
+            "student_id": str(sp_id),
+            "present": s["present"],
+            "late": s["late"],
+            "absent": s["absent"],
+            "excused": s["excused"],
+            "missed_count": missed,
+            "missed_percent": missed_percent,
+        })
+
+    return Response(
+        {
+            "month": month_str,
+            "dates": [d.isoformat() for d in dates_list],
+            "students": students,
+            "records": records,
+            "stats": stats,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsTeacher])
+def attendance_mark_all_present_view(request):
+    """
+    POST /api/teacher/attendance/mark-all-present
+    Body: { groupId: X, date: "YYYY-MM-DD" }
+    Upsert all students in group for that date as status=present.
+    """
+    group_id = request.data.get("groupId")
+    date_str = request.data.get("date")
+
+    if not group_id or not date_str:
+        return Response(
+            {"detail": "groupId and date are required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        target_date = datetime.strptime(str(date_str)[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return Response(
+            {"detail": "Invalid date format"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        group = Group.objects.get(id=group_id)
+    except (Group.DoesNotExist, ValueError, TypeError):
+        return Response({"detail": "Group not found"}, status=status.HTTP_404_NOT_FOUND)
+    if not belongs_to_user_organization(group, request.user):
+        return Response({"detail": "Access denied"}, status=status.HTTP_403_FORBIDDEN)
+
+    memberships = get_active_students_for_group(group)
+    students = [m.student_profile for m in memberships if not m.student_profile.is_deleted]
+
+    saved = 0
+    updated_records = []
+    with transaction.atomic():
+        for sp in students:
+            if not belongs_to_user_organization(sp.user, request.user, "organization"):
+                continue
+            AttendanceRecord.objects.update_or_create(
+                student_profile=sp,
+                lesson_date=target_date,
+                defaults={
+                    "status": DEFAULT_STATUS,
+                    "group": group,
+                    "organization": request.user.organization,
+                    "marked_by": request.user,
+                    "marked_at": timezone.now(),
+                },
+            )
+            saved += 1
+            updated_records.append({"student_id": str(sp.id), "date": target_date.isoformat(), "status": DEFAULT_STATUS})
+
+        if saved:
+            try:
+                maybe_open_session_and_charge(group, target_date)
+            except Exception as e:
+                logger.error(f"Error in maybe_open_session_and_charge: {e}", exc_info=True)
+
+    return Response({"saved": saved, "items": updated_records}, status=status.HTTP_200_OK)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsTeacher])
+def lesson_finalize_view(request):
+    """
+    POST /api/teacher/lessons/finalize
+    Body: { groupId, date: "YYYY-MM-DD" }
+    Finalize lesson and charge students (except excused).
+    """
+    group_id = request.data.get("groupId") or request.data.get("group_id")
+    date_str = request.data.get("date")
+    
+    if not group_id or not date_str:
+        return Response({"detail": "groupId and date required"}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        target_date = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return Response({"detail": "Invalid date format"}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        group = Group.objects.get(id=group_id)
+    except Group.DoesNotExist:
+        return Response({"detail": "Group not found"}, status=status.HTTP_404_NOT_FOUND)
+    if not belongs_to_user_organization(group, request.user):
+        return Response({"detail": "Access denied"}, status=status.HTTP_403_FORBIDDEN)
+    
+    try:
+        lesson_finalized, students_charged, charge_details = finalize_lesson_and_charge(
+            group, target_date, created_by=request.user
+        )
+        return Response({
+            "ok": True,
+            "lesson_finalized": lesson_finalized,
+            "students_charged": students_charged,
+            "charge_details": charge_details,
+            "message": f"Dərs yekunlaşdırıldı. {students_charged} şagird üçün balans yeniləndi."
+        })
+    except Exception as e:
+        logger.error(f"[lesson_finalize] Error: {e}", exc_info=True)
+        return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsTeacher])
+def lesson_unlock_view(request):
+    """
+    POST /api/teacher/lessons/unlock
+    Body: { groupId, date: "YYYY-MM-DD" }
+    Unlock finalized lesson to allow editing.
+    """
+    group_id = request.data.get("groupId") or request.data.get("group_id")
+    date_str = request.data.get("date")
+    
+    if not group_id or not date_str:
+        return Response({"detail": "groupId and date required"}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        target_date = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return Response({"detail": "Invalid date format"}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        group = Group.objects.get(id=group_id)
+    except Group.DoesNotExist:
+        return Response({"detail": "Group not found"}, status=status.HTTP_404_NOT_FOUND)
+    if not belongs_to_user_organization(group, request.user):
+        return Response({"detail": "Access denied"}, status=status.HTTP_403_FORBIDDEN)
+    
+    try:
+        lesson_held = LessonHeld.objects.get(group=group, date=target_date)
+        lesson_held.is_finalized = False
+        lesson_held.save(update_fields=['is_finalized'])
+        return Response({
+            "ok": True,
+            "message": "Dərs kilidi açıldı. İndi redaktə edə bilərsiniz."
+        })
+    except LessonHeld.DoesNotExist:
+        return Response({"detail": "Lesson not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsTeacher])
+def attendance_bulk_delete_view(request):
+    """
+    POST /api/teacher/attendance/bulk-delete
+    Body: { groupId: X, items: [{ studentId, date }, ...] }
+    Delete attendance records (to clear cell back to empty).
+    """
+    group_id = request.data.get("groupId")
+    items = request.data.get("items", [])
+
+    if not group_id:
+        return Response(
+            {"detail": "groupId is required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not isinstance(items, list):
+        return Response(
+            {"detail": "items must be an array"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        group = Group.objects.get(id=group_id)
+    except (Group.DoesNotExist, ValueError, TypeError):
+        return Response({"detail": "Group not found"}, status=status.HTTP_404_NOT_FOUND)
+    if not belongs_to_user_organization(group, request.user):
+        return Response({"detail": "Access denied"}, status=status.HTTP_403_FORBIDDEN)
+
+    deleted = 0
+    with transaction.atomic():
+        for item in items:
+            student_id = item.get("studentId")
+            date_str = item.get("date")
+            if not student_id or not date_str:
+                continue
+            try:
+                target_date = datetime.strptime(str(date_str)[:10], "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                continue
+            try:
+                student = StudentProfile.objects.get(id=student_id, is_deleted=False)
+            except StudentProfile.DoesNotExist:
+                continue
+            if not belongs_to_user_organization(student.user, request.user, "organization"):
+                continue
+
+            n, _ = AttendanceRecord.objects.filter(
+                student_profile=student,
+                lesson_date=target_date,
+            ).delete()
+            deleted += n
+
+    return Response({"deleted": deleted}, status=status.HTTP_200_OK)

@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     'groups',
     'attendance',
     'payments',
+    'notifications',
     'tests',
     'coding',
 ]
@@ -65,6 +66,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'config.middleware.FrameOptionsExemptMiddleware',  # Allow /media/ and run PDF in iframes
 ]
 
 # Disable APPEND_SLASH for API endpoints (REST APIs typically don't use trailing slashes)

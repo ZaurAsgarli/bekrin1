@@ -155,7 +155,7 @@ export default function CodingMonitorPage() {
             <ul className="space-y-3">
               {filteredRanking.map((r, idx) => (
                 <li
-                  key={r.student.id}
+                  key={`${String(r.student.userId ?? r.student.id)}-${r.groupName ?? ''}-${idx}`}
                   className="flex items-center justify-between py-2 border-b border-slate-100 hover:bg-slate-50 cursor-pointer"
                   onClick={() => {
                     setSelectedStudentId(String(r.student.userId ?? r.student.id));

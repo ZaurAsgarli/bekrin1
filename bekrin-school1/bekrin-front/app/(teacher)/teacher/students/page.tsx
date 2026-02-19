@@ -11,6 +11,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import Link from "next/link";
+import { formatPaymentDisplay } from "@/lib/formatPayment";
 import { Pencil, Trash2, RotateCcw, X, UserPlus, Key } from "lucide-react";
 
 const studentSchema = z.object({
@@ -251,7 +252,7 @@ export default function StudentsPage() {
                     {student.phone || "-"}
                   </td>
                   <td className="py-3 px-4 text-sm font-medium text-slate-900">
-                    {student.balance.toFixed(2)} ₼
+                    {formatPaymentDisplay(student.balance, "teacher")} ₼
                   </td>
                   <td className="py-3 px-4 text-sm">
                     <div className="flex items-center justify-end gap-2">

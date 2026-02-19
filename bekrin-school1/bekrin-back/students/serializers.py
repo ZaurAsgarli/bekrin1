@@ -4,6 +4,7 @@ Serializers for students app
 from rest_framework import serializers
 from .models import StudentProfile, ParentChild
 from accounts.serializers import UserSerializer
+from .utils import get_teacher_display_balance
 
 
 class StudentProfileSerializer(serializers.ModelSerializer):
@@ -23,13 +24,17 @@ class StudentProfileSerializer(serializers.ModelSerializer):
         return 'deleted' if obj.deleted_at else 'active'
     
     def to_representation(self, instance):
-        """Convert grade to 'class' and balance to float in response"""
+        """Convert grade to 'class' and balance to float in response.
+        Add displayBalanceTeacher for teacher views."""
         data = super().to_representation(instance)
         if 'grade' in data:
             data['class'] = data.pop('grade')
         # Convert DecimalField balance to float for frontend
         if 'balance' in data and data['balance'] is not None:
-            data['balance'] = float(data['balance'])
+            real_balance = float(data['balance'])
+            data['balance'] = real_balance
+            # Add teacher display balance (real / 4)
+            data['displayBalanceTeacher'] = get_teacher_display_balance(instance.balance)
         return data
 
 
@@ -44,8 +49,7 @@ class StudentProfileUpdateSerializer(serializers.ModelSerializer):
         fields = ['fullName', 'grade', 'phone', 'balance']
     
     def validate_balance(self, value):
-        if value < 0:
-            raise serializers.ValidationError("Balance cannot be negative")
+        # Allow negative (e.g. after lesson debits or manual correction)
         return value
     
     def update(self, instance, validated_data):

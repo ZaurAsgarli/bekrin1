@@ -3,7 +3,6 @@ Student Profile, Parent/Teacher profiles, and Parent-Child relationship.
 ERD: student_profile (deleted_at), parent_profile, teacher_profile, parent_student (parent_id, student_id → User).
 """
 from django.db import models
-from django.core.validators import MinValueValidator
 from accounts.models import User
 
 
@@ -23,7 +22,7 @@ class StudentProfile(models.Model):
         max_digits=10,
         decimal_places=2,
         default=0.00,
-        validators=[MinValueValidator(0)],
+        # No MinValueValidator: balance may go negative (lesson debits)
     )
     notes = models.TextField(blank=True, null=True)
     is_deleted = models.BooleanField(default=False, db_index=True)
@@ -189,3 +188,110 @@ class ImportedCredentialRecord(models.Model):
 
     def __str__(self):
         return f"{self.student_full_name} ({self.student_email})"
+
+
+class BalanceLedger(models.Model):
+    """
+    Balance ledger for audit trail. Prevents duplicate charges via unique constraint.
+    Stores all balance changes: lesson charges, topups, etc.
+    """
+    REASON_LESSON_CHARGE = "LESSON_CHARGE"
+    REASON_TOPUP = "TOPUP"
+    REASON_MANUAL = "MANUAL"
+    
+    REASON_CHOICES = [
+        (REASON_LESSON_CHARGE, "Lesson Charge"),
+        (REASON_TOPUP, "Top-up"),
+        (REASON_MANUAL, "Manual Adjustment"),
+    ]
+    
+    student_profile = models.ForeignKey(
+        StudentProfile,
+        on_delete=models.CASCADE,
+        related_name="balance_ledger_entries",
+        db_index=True,
+    )
+    group = models.ForeignKey(
+        "groups.Group",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="balance_ledger_entries",
+        db_index=True,
+    )
+    date = models.DateField(db_index=True, help_text="Date of the transaction")
+    amount_delta = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Negative for charges, positive for topups",
+    )
+    reason = models.CharField(max_length=50, choices=REASON_CHOICES, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = "balance_ledger"
+        verbose_name = "Balance Ledger Entry"
+        verbose_name_plural = "Balance Ledger Entries"
+        ordering = ["-date", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student_profile", "group", "date", "reason"],
+                name="unique_student_group_date_reason",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["student_profile", "date"]),
+            models.Index(fields=["group", "date"]),
+        ]
+    
+    def __str__(self):
+        return f"{self.student_profile.user.full_name} - {self.date} - {self.reason} - {self.amount_delta}"
+
+
+class BalanceTransaction(models.Model):
+    """
+    Audit record for balance changes. lesson_debit: one per student per group per lesson_date.
+    Prevents double-charging via UniqueConstraint(student_profile, group, lesson_date, type).
+    DEPRECATED: Use BalanceLedger instead. Kept for backward compatibility.
+    """
+    TYPE_LESSON_DEBIT = "lesson_debit"
+    TYPE_CHOICES = [(TYPE_LESSON_DEBIT, "Dərs haqqı çıxılışı")]
+
+    student_profile = models.ForeignKey(
+        StudentProfile,
+        on_delete=models.CASCADE,
+        related_name="balance_transactions",
+        db_index=True,
+    )
+    group = models.ForeignKey(
+        "groups.Group",
+        on_delete=models.CASCADE,
+        related_name="balance_transactions",
+        db_index=True,
+    )
+    lesson_date = models.DateField(db_index=True)
+    amount = models.DecimalField(
+        max_digits=10, decimal_places=2,
+        help_text="Negative for debit (e.g. -12.50)",
+    )
+    type = models.CharField(max_length=30, choices=TYPE_CHOICES, default=TYPE_LESSON_DEBIT)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "balance_transactions"
+        verbose_name = "Balance Transaction"
+        verbose_name_plural = "Balance Transactions"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student_profile", "group", "lesson_date", "type"],
+                name="unique_student_group_lesson_type",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["student_profile_id", "lesson_date"]),
+            models.Index(fields=["group_id", "lesson_date"]),
+        ]
+        ordering = ["-lesson_date", "-created_at"]
+
+    def __str__(self):
+        return f"{self.student_profile} {self.lesson_date} {self.amount}"

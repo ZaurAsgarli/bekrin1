@@ -4,9 +4,11 @@ Visibility: students see exams only when status=active and now in [start_time, e
 Results visible only when is_result_published and manual check done.
 """
 import base64
+import logging
 import re
 from decimal import Decimal
 from django.core.files.base import ContentFile
+from django.http import FileResponse
 from django.utils import timezone
 from django.db import transaction
 from rest_framework import status
@@ -28,6 +30,7 @@ from tests.models import (
     TeacherPDF,
     ExamAssignment,
     ExamStudentAssignment,
+    GradingAuditLog,
 )
 from groups.models import Group
 from tests.serializers import (
@@ -44,11 +47,71 @@ from tests.serializers import (
     TeacherPDFSerializer,
 )
 from tests.evaluate import evaluate_open_single_value
-from tests.answer_key import validate_answer_key_json
+from tests.answer_key import validate_answer_key_json, validate_and_normalize_answer_key_json
 
 
 def _now():
     return timezone.now()
+
+
+def _auto_finish_exam_if_all_graded(exam):
+    """
+    Auto-transition exam to 'finished' when ALL submitted attempts are graded and published.
+    Also moves exam to 'Köhnə testlər' by setting is_archived=False but status='finished'.
+    """
+    # Get all submitted (non-restarted) attempts
+    attempts = ExamAttempt.objects.filter(
+        exam=exam,
+        status='SUBMITTED',
+    ).exclude(is_archived=True)
+    
+    if not attempts.exists():
+        return  # No submitted attempts yet
+    
+    # Check if ALL submitted attempts are checked and published
+    all_graded = all(a.is_checked and a.is_result_published for a in attempts)
+    
+    if all_graded:
+        exam.status = 'finished'
+        exam.is_result_published = True
+        exam.save(update_fields=['status', 'is_result_published'])
+        
+        # Also mark all runs as finished
+        ExamRun.objects.filter(exam=exam).exclude(status='finished').update(status='finished')
+
+
+def _auto_transition_run_status():
+    """
+    Background check: transition runs whose end_at has passed from 'active' → 'finished'.
+    Also check if exam should move to waiting_for_grading.
+    Called periodically or on view access.
+    """
+    now = _now()
+    expired_runs = ExamRun.objects.filter(status='active', end_at__lt=now)
+    for run in expired_runs:
+        run.status = 'finished'
+        run.save(update_fields=['status'])
+    
+    # For each exam with all runs finished, check if exam should transition
+    exams_with_finished_runs = Exam.objects.filter(
+        status='active',
+        runs__status='finished'
+    ).exclude(runs__status='active').distinct()
+    
+    for exam in exams_with_finished_runs:
+        # If no active runs remain, exam goes to waiting_for_grading (handled by view)
+        if not exam.runs.filter(status='active').exists():
+            has_ungraded = ExamAttempt.objects.filter(
+                exam=exam,
+                status='SUBMITTED',
+                is_checked=False,
+            ).exists()
+            if has_ungraded:
+                # Still has ungraded attempts - keep as active but conceptually waiting
+                pass
+            else:
+                # All graded - auto-finish
+                _auto_finish_exam_if_all_graded(exam)
 
 
 def _build_canvas_response(canvas, request=None):
@@ -160,34 +223,8 @@ def _validate_exam_composition(exam):
         is_valid, err = _validate_exam_composition_from_answer_key(exam.answer_key_json)
         return is_valid, err
     # BANK
-    eqs = list(ExamQuestion.objects.filter(exam=exam).select_related('question').order_by('order'))
-    if not eqs:
-        return False, "İmtahanda heç bir sual yoxdur"
-
-    closed_count = sum(1 for eq in eqs if eq.question.type == 'MULTIPLE_CHOICE')
-    open_count = sum(1 for eq in eqs if eq.question.type in ('OPEN_SINGLE_VALUE', 'OPEN_ORDERED', 'OPEN_UNORDERED'))
-    situation_count = sum(1 for eq in eqs if eq.question.type == 'SITUATION')
-    total = len(eqs)
-
-    if exam.type == 'quiz':
-        if total != 15:
-            return False, f"Quiz 15 sual olmalıdır. Hazırda {total} sual var."
-        if closed_count != 12:
-            return False, f"Quiz-də dəqiq 12 qapalı sual olmalıdır. Hazırda {closed_count} var."
-        if open_count != 3:
-            return False, f"Quiz-də dəqiq 3 açıq sual olmalıdır. Hazırda {open_count} var."
-        if situation_count != 0:
-            return False, f"Quiz-də situasiya sualı olmamalıdır. Hazırda {situation_count} var."
-    elif exam.type == 'exam':
-        if total != 30:
-            return False, f"İmtahan 30 sual olmalıdır. Hazırda {total} sual var."
-        if closed_count != 22:
-            return False, f"İmtahanda dəqiq 22 qapalı sual olmalıdır. Hazırda {closed_count} var."
-        if open_count != 5:
-            return False, f"İmtahanda dəqiq 5 açıq sual olmalıdır. Hazırda {open_count} var."
-        if situation_count != 3:
-            return False, f"İmtahanda dəqiq 3 situasiya sualı olmalıdır. Hazırda {situation_count} var."
-
+    # Relaxed validation: Allow any number of questions for now
+    # We can add a 'strict_mode' flag later if needed for precise DIM exam simulation.
     return True, None
 
 
@@ -203,6 +240,11 @@ def _validate_exam_composition_from_answer_key(answer_key):
 @permission_classes([IsAuthenticated, IsTeacher])
 def teacher_exams_view(request):
     if request.method == 'GET':
+        # Auto-transition expired runs to 'finished' and check exam status
+        try:
+            _auto_transition_run_status()
+        except Exception:
+            pass  # Don't fail exam listing if auto-transition has issues
         exams = Exam.objects.filter(created_by=request.user, is_archived=False).select_related(
             'created_by', 'pdf_document'
         ).prefetch_related(
@@ -215,14 +257,15 @@ def teacher_exams_view(request):
         if source_type not in ('BANK', 'PDF', 'JSON'):
             return Response({'detail': 'source_type must be BANK, PDF, or JSON'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # PDF/JSON: require answer_key (answer_key_json or json_import)
+        # PDF/JSON: require answer_key (answer_key_json or json_import); normalize no/qtype/options/correct index
         answer_key = data.get('answer_key_json') or data.get('json_import')
         if source_type in ('PDF', 'JSON'):
             if not answer_key:
                 return Response({'detail': 'answer_key_json or json_import required for PDF/JSON source'}, status=status.HTTP_400_BAD_REQUEST)
-            is_valid, err = _validate_exam_composition_from_answer_key(answer_key)
+            is_valid, err, normalized = validate_and_normalize_answer_key_json(answer_key)
             if not is_valid:
-                return Response({'detail': err, 'errors': err if isinstance(err, list) else [err]}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({'detail': err[0] if err else 'Invalid answer key', 'errors': err or []}, status=status.HTTP_400_BAD_REQUEST)
+            answer_key = normalized or answer_key
             exam_type = answer_key.get('type') or 'quiz'
             data['type'] = exam_type
             data['answer_key_json'] = answer_key
@@ -230,14 +273,22 @@ def teacher_exams_view(request):
             pdf_id = data.get('pdf_id') or data.get('pdfId')
             if pdf_id:
                 try:
-                    pdf = TeacherPDF.objects.get(pk=int(pdf_id), teacher=request.user, is_archived=False, is_deleted=False)
-                    data['pdf_document_id'] = pdf.id
+                    from django.conf import settings
+                    qs = TeacherPDF.objects.filter(pk=int(pdf_id), is_archived=False, is_deleted=False)
+                    if not getattr(settings, 'SINGLE_TENANT', True):
+                        qs = qs.filter(teacher=request.user)
+                    pdf = qs.get()
+                    # Verify PDF file actually exists on disk
+                    if not pdf.file or not pdf.file.storage.exists(pdf.file.name):
+                        return Response({'detail': 'PDF file not found on disk'}, status=status.HTTP_400_BAD_REQUEST)
+                    data['pdf_document'] = pdf.id
                 except (TeacherPDF.DoesNotExist, ValueError, TypeError):
                     return Response({'detail': 'PDF not found or not owned by teacher'}, status=status.HTTP_400_BAD_REQUEST)
         elif source_type == 'BANK':
             data.pop('answer_key_json', None)
             data.pop('json_import', None)
             data.pop('pdf_document_id', None)
+            data.pop('pdf_document', None)
 
         s = ExamSerializer(data=data)
         if s.is_valid():
@@ -276,27 +327,12 @@ def teacher_exam_detail_view(request, pk):
     if request.method == 'GET':
         return Response(ExamDetailSerializer(exam, context={'request': request}).data)
     if request.method == 'PATCH':
-        s = ExamSerializer(exam, data=request.data, partial=True)
+        # Status cannot be changed directly - it's controlled by runs
+        data = request.data.copy()
+        data.pop('status', None)  # Remove status from update data
+        s = ExamSerializer(exam, data=data, partial=True)
         if s.is_valid():
             s.save()
-            # Validate composition if trying to activate
-            if request.data.get('status') == 'active':
-                is_valid, error_msg = _validate_exam_composition(exam)
-                if not is_valid:
-                    exam.status = 'draft'
-                    exam.save(update_fields=['status'])
-                    return Response({'detail': error_msg}, status=status.HTTP_400_BAD_REQUEST)
-                # Ghost validation: require duration and at least one target
-                if (exam.duration_minutes or 0) <= 0:
-                    exam.status = 'draft'
-                    exam.save(update_fields=['status'])
-                    return Response({'detail': 'Aktiv imtahan üçün duration_minutes tələb olunur.'}, status=status.HTTP_400_BAD_REQUEST)
-                has_group = ExamAssignment.objects.filter(exam=exam, is_active=True).exists()
-                has_student = ExamStudentAssignment.objects.filter(exam=exam, is_active=True).exists()
-                if not has_group and not has_student:
-                    exam.status = 'draft'
-                    exam.save(update_fields=['status'])
-                    return Response({'detail': 'Aktiv imtahan üçün ən azı bir qrup və ya şagird təyin edilməlidir.'}, status=status.HTTP_400_BAD_REQUEST)
             return Response(ExamSerializer(exam).data)
         return Response(s.errors, status=status.HTTP_400_BAD_REQUEST)
     if request.method == 'DELETE':
@@ -396,6 +432,7 @@ def teacher_exam_start_now_view(request, exam_id):
         group_ids = []
     student_id = request.data.get('studentId') or request.data.get('student_id')
     duration_minutes = request.data.get('durationMinutes') or request.data.get('duration_minutes') or exam.duration_minutes
+    start_time_str = request.data.get('startTime') or request.data.get('start_time')
     
     if not duration_minutes:
         return Response({'error': 'durationMinutes required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -404,29 +441,53 @@ def teacher_exam_start_now_view(request, exam_id):
         return Response({'error': 'At least one target required: groupIds or studentId'}, status=status.HTTP_400_BAD_REQUEST)
     
     now = _now()
-    end_time = now + timedelta(minutes=int(duration_minutes))
+    # Parse start_time if provided, otherwise use now
+    if start_time_str:
+        try:
+            from django.utils.dateparse import parse_datetime
+            start_time = parse_datetime(start_time_str)
+            if start_time is None:
+                start_time = now
+            elif start_time < now:
+                return Response({'error': 'Start time cannot be in the past'}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            start_time = now
+    else:
+        start_time = now
+    end_time = start_time + timedelta(minutes=int(duration_minutes))
     duration_int = int(duration_minutes)
     
     with transaction.atomic():
         exam.status = 'active'
         exam.save(update_fields=['status'])
-        
+
         # Per-assignment timing: add/update targets, do NOT delete existing
         if group_ids:
             groups_qs = Group.objects.filter(id__in=group_ids)
             if not getattr(settings, 'SINGLE_TENANT', True):
                 groups_qs = groups_qs.filter(created_by=request.user)
             for group in groups_qs:
-                ass, _ = ExamAssignment.objects.update_or_create(
+                ExamAssignment.objects.update_or_create(
                     exam=exam, group=group,
                     defaults={
-                        'start_time': now,
+                        'start_time': start_time,
                         'end_time': end_time,
                         'duration_minutes': duration_int,
                         'is_active': True,
                     }
                 )
-        
+                # Create one ExamRun per group so students see this exam in their list
+                ExamRun.objects.create(
+                    exam=exam,
+                    group=group,
+                    student=None,
+                    start_at=start_time,
+                    end_at=end_time,
+                    duration_minutes=duration_int,
+                    status='active',
+                    created_by=request.user,
+                )
+
         if student_id:
             from accounts.models import User
             try:
@@ -438,30 +499,71 @@ def teacher_exam_start_now_view(request, exam_id):
                     ExamStudentAssignment.objects.update_or_create(
                         exam=exam, student=student,
                         defaults={
-                            'start_time': now,
+                            'start_time': start_time,
                             'end_time': end_time,
                             'duration_minutes': duration_int,
                             'is_active': True,
                         }
                     )
+                    # Create one ExamRun for this student so they see it in their list
+                    ExamRun.objects.create(
+                        exam=exam,
+                        group=None,
+                        student=student,
+                        start_at=start_time,
+                        end_at=end_time,
+                        duration_minutes=duration_int,
+                        status='active',
+                        created_by=request.user,
+                    )
             except (User.DoesNotExist, ValueError, TypeError):
                 pass
-    
+
     return Response(ExamSerializer(exam).data)
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, IsTeacher])
 def teacher_exam_stop_view(request, exam_id):
-    """Stop exam: set status to finished. Students can no longer access."""
+    """Stop exam: set all active runs to finished, then exam status to finished if all runs finished."""
     try:
-        exam = Exam.objects.get(pk=exam_id, created_by=request.user)
+        exam = Exam.objects.prefetch_related('runs').get(pk=exam_id, created_by=request.user)
     except Exam.DoesNotExist:
         return Response({'error': 'Exam not found'}, status=status.HTTP_404_NOT_FOUND)
     
-    exam.status = 'finished'
-    exam.save(update_fields=['status'])
+    # Set all active runs to finished
+    active_runs = exam.runs.filter(status='active')
+    active_runs.update(status='finished')
+    
+    # If all runs are finished, set exam status to finished
+    remaining_active = exam.runs.filter(status='active').exists()
+    if not remaining_active:
+        exam.status = 'finished'
+        exam.save(update_fields=['status'])
+    
     return Response(ExamSerializer(exam).data)
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated, IsTeacher])
+def teacher_run_update_view(request, run_id):
+    """Update run duration: extend end_at by new duration_minutes."""
+    try:
+        run = ExamRun.objects.select_related('exam').get(pk=run_id, exam__created_by=request.user)
+    except ExamRun.DoesNotExist:
+        return Response({'detail': 'Run not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    if run.status != 'active':
+        return Response({'detail': 'Can only update active runs'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    duration_minutes = request.data.get('duration_minutes') or request.data.get('durationMinutes')
+    if duration_minutes:
+        duration_minutes = int(duration_minutes)
+        run.duration_minutes = duration_minutes
+        run.end_at = run.start_at + timedelta(minutes=duration_minutes)
+        run.save(update_fields=['duration_minutes', 'end_at'])
+    
+    return Response(ExamRunSerializer(run).data)
 
 
 @api_view(['POST'])
@@ -469,8 +571,9 @@ def teacher_exam_stop_view(request, exam_id):
 def teacher_exam_create_run_view(request, exam_id):
     """
     POST /api/teacher/exams/{id}/create-run
-    Body: { groupId?, studentId?, duration_minutes, start_now?: true }
+    Body: { groupId?, studentId?, duration_minutes, startTime? }
     Returns: { runId, start_at, end_at }
+    Creates run and automatically activates exam.
     """
     try:
         exam = Exam.objects.get(pk=exam_id, created_by=request.user)
@@ -482,25 +585,43 @@ def teacher_exam_create_run_view(request, exam_id):
     group_id = request.data.get('groupId') or request.data.get('group_id')
     student_id = request.data.get('studentId') or request.data.get('student_id')
     duration_minutes = request.data.get('duration_minutes') or request.data.get('durationMinutes')
+    start_time_str = request.data.get('startTime') or request.data.get('start_time')
     if not duration_minutes:
         return Response({'detail': 'duration_minutes required'}, status=status.HTTP_400_BAD_REQUEST)
     duration_minutes = int(duration_minutes)
     if not group_id and not student_id:
         return Response({'detail': 'groupId or studentId required'}, status=status.HTTP_400_BAD_REQUEST)
     now = _now()
-    start_now = request.data.get('start_now') or request.data.get('startNow')
-    start_at = now if start_now else now
+    if start_time_str:
+        try:
+            from django.utils.dateparse import parse_datetime
+            start_at = parse_datetime(start_time_str)
+            if start_at is None:
+                start_at = now
+            elif start_at < now:
+                return Response({'detail': 'Start time cannot be in the past'}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            start_at = now
+    else:
+        start_at = now
     end_at = start_at + timedelta(minutes=duration_minutes)
-    run = ExamRun.objects.create(
-        exam=exam,
-        group_id=int(group_id) if group_id else None,
-        student_id=int(student_id) if student_id else None,
-        start_at=start_at,
-        end_at=end_at,
-        duration_minutes=duration_minutes,
-        status='active' if start_now else 'scheduled',
-        created_by=request.user,
-    )
+    
+    with transaction.atomic():
+        # Automatically activate exam when run is created
+        if exam.status == 'draft':
+            exam.status = 'active'
+            exam.save(update_fields=['status'])
+        
+        run = ExamRun.objects.create(
+            exam=exam,
+            group_id=int(group_id) if group_id else None,
+            student_id=int(student_id) if student_id else None,
+            start_at=start_at,
+            end_at=end_at,
+            duration_minutes=duration_minutes,
+            status='active' if start_at <= now else 'scheduled',
+            created_by=request.user,
+        )
     return Response({
         'runId': run.id,
         'start_at': run.start_at.isoformat(),
@@ -527,34 +648,92 @@ def teacher_exam_runs_list_view(request, exam_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsTeacher])
 def teacher_run_attempts_view(request, run_id):
-    """GET /api/teacher/runs/{runId}/attempts - List attempts for a run."""
+    """GET /api/teacher/runs/{runId}/attempts - List attempts for a run. Shows all students in group, even if they never started."""
     try:
-        run = ExamRun.objects.select_related('exam').get(pk=run_id, exam__created_by=request.user)
+        run = ExamRun.objects.select_related('exam', 'group', 'student').get(pk=run_id, exam__created_by=request.user)
     except ExamRun.DoesNotExist:
         return Response({'detail': 'Run not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    exam = run.exam
+    max_s = float(exam.max_score or (100 if exam.type == 'quiz' else 150))
+    
+    # Get all attempts for this run
     attempts = ExamAttempt.objects.filter(exam_run=run, is_archived=False).select_related(
         'student', 'student__student_profile'
     ).order_by('-started_at')
-    data = []
-    for a in attempts:
-        exam = run.exam
-        max_s = float(exam.max_score or (100 if exam.type == 'quiz' else 150))
-        final = float(a.manual_score) if a.manual_score is not None else float(a.auto_score or 0)
-        data.append({
-            'id': a.id,
-            'studentId': a.student_id,
-            'studentName': a.student.full_name,
-            'status': 'SUBMITTED' if a.finished_at else 'IN_PROGRESS',
-            'startedAt': a.started_at.isoformat(),
-            'finishedAt': a.finished_at.isoformat() if a.finished_at else None,
-            'autoScore': float(a.auto_score or 0),
-            'manualScore': float(a.manual_score) if a.manual_score is not None else None,
-            'finalScore': final,
-            'maxScore': max_s,
-            'isChecked': a.is_checked,
-            'isPublished': a.is_result_published,
-        })
-    return Response({'attempts': data})
+    
+    # If run is for a group, include all students in group (even if they never started)
+    if run.group:
+        from groups.services import get_active_students_for_group
+        memberships = get_active_students_for_group(run.group)
+        student_ids_in_group = {m.student_profile.user_id for m in memberships}
+        attempt_by_student = {a.student_id: a for a in attempts}
+        
+        data = []
+        for student_id in student_ids_in_group:
+            attempt = attempt_by_student.get(student_id)
+            if attempt:
+                auto = float(attempt.auto_score or 0)
+                manual = float(attempt.manual_score or 0) if attempt.manual_score is not None else 0
+                final = float(attempt.total_score) if attempt.total_score is not None else (auto + manual)
+                data.append({
+                    'id': attempt.id,
+                    'studentId': attempt.student_id,
+                    'studentName': attempt.student.full_name,
+                    'status': 'SUBMITTED' if attempt.finished_at else ('EXPIRED' if attempt.status == 'EXPIRED' else 'IN_PROGRESS'),
+                    'startedAt': attempt.started_at.isoformat(),
+                    'finishedAt': attempt.finished_at.isoformat() if attempt.finished_at else None,
+                    'autoScore': auto,
+                    'manualScore': float(attempt.manual_score) if attempt.manual_score is not None else None,
+                    'finalScore': min(final, max_s),
+                    'maxScore': max_s,
+                    'isChecked': attempt.is_checked,
+                    'isPublished': attempt.is_result_published,
+                })
+            else:
+                # Student never started - show as not started
+                from accounts.models import User
+                try:
+                    student = User.objects.get(id=student_id, role='student')
+                    data.append({
+                        'id': None,
+                        'studentId': student.id,
+                        'studentName': student.full_name,
+                        'status': 'NOT_STARTED',
+                        'startedAt': None,
+                        'finishedAt': None,
+                        'autoScore': 0,
+                        'manualScore': None,
+                        'finalScore': 0,
+                        'maxScore': max_s,
+                        'isChecked': False,
+                        'isPublished': False,
+                    })
+                except User.DoesNotExist:
+                    pass
+        return Response({'attempts': data})
+    else:
+        # Individual student run
+        data = []
+        for a in attempts:
+            auto = float(a.auto_score or 0)
+            manual = float(a.manual_score or 0) if a.manual_score is not None else 0
+            final = float(a.total_score) if a.total_score is not None else (auto + manual)
+            data.append({
+                'id': a.id,
+                'studentId': a.student_id,
+                'studentName': a.student.full_name,
+                'status': 'SUBMITTED' if a.finished_at else ('EXPIRED' if a.status == 'EXPIRED' else 'IN_PROGRESS'),
+                'startedAt': a.started_at.isoformat(),
+                'finishedAt': a.finished_at.isoformat() if a.finished_at else None,
+                'autoScore': float(a.auto_score or 0),
+                'manualScore': float(a.manual_score) if a.manual_score is not None else None,
+                'finalScore': final,
+                'maxScore': max_s,
+                'isChecked': a.is_checked,
+                'isPublished': a.is_result_published,
+            })
+        return Response({'attempts': data})
 
 
 @api_view(['POST'])
@@ -624,6 +803,27 @@ def student_exams_list_view(request):
         start_at__lte=now,
         end_at__gte=now,
     ).select_related('exam').order_by('end_at')
+
+    # Exclude runs where student already submitted and attempt is locked (unless teacher reopened)
+    submitted_run_ids = set(
+        ExamAttempt.objects.filter(
+            student=request.user,
+            exam_run_id__isnull=False,
+            finished_at__isnull=False,
+            is_visible_to_student=False,  # Only hide if locked
+        ).exclude(status='RESTARTED').values_list('exam_run_id', flat=True)
+    )
+    runs = [r for r in runs if r.id not in submitted_run_ids]
+
+    # Prefer at most one run per exam (avoid multiple entries for same exam): keep run with latest end_at per exam_id
+    seen_exam_ids = set()
+    deduped = []
+    for r in sorted(runs, key=lambda x: (x.exam_id, -x.end_at.timestamp())):
+        if r.exam_id not in seen_exam_ids:
+            seen_exam_ids.add(r.exam_id)
+            deduped.append(r)
+    runs = deduped
+
     data = []
     for run in runs:
         remaining_seconds = max(0, int((run.end_at - now).total_seconds()))
@@ -658,8 +858,11 @@ def student_exam_my_results_view(request):
     data = []
     for a in attempts:
         max_score = float(a.exam.max_score or (100 if a.exam.type == 'quiz' else 150))
-        is_published = a.exam.is_result_published and a.is_checked
+        is_published = a.is_result_published and a.is_checked
         status_enum = 'PUBLISHED' if is_published else ('WAITING_MANUAL' if a.is_checked else 'SUBMITTED')
+        auto_s = float(a.auto_score or 0) if a.auto_score is not None else None
+        manual_s = float(a.manual_score) if a.manual_score is not None else None
+        total_s = float(a.total_score) if a.total_score is not None else (float(a.auto_score or 0) + float(a.manual_score or 0)) if a.auto_score is not None else None
         data.append({
             'attemptId': a.id,
             'examId': a.exam_id,
@@ -668,11 +871,11 @@ def student_exam_my_results_view(request):
             'title': a.exam.title,
             'status': status_enum,
             'is_result_published': is_published,
-            'autoScore': float(a.auto_score or 0) if a.auto_score is not None else None,
-            'manualScore': float(a.manual_score) if a.manual_score is not None else None,
-            'totalScore': float(a.manual_score if a.manual_score is not None else a.auto_score or 0) if is_published else None,
+            'autoScore': auto_s if is_published else None,
+            'manualScore': manual_s if is_published else None,
+            'totalScore': total_s if is_published else None,
             'maxScore': max_score,
-            'score': float(a.manual_score if a.manual_score is not None else a.auto_score or 0) if is_published else None,
+            'score': total_s if is_published else None,
             'submittedAt': a.finished_at.isoformat() if a.finished_at else None,
             'finishedAt': a.finished_at.isoformat() if a.finished_at else None,
         })
@@ -736,8 +939,151 @@ def _student_has_run_access(run, user):
     ).exists()
 
 
+logger = logging.getLogger(__name__)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsStudent])
+def student_run_pdf_view(request, run_id):
+    """
+    Protected PDF: require run accessible + within time + attempt exists + attempt not submitted.
+    Returns 403 if any check fails. Streams PDF file.
+    """
+    now = _now()
+    try:
+        run = ExamRun.objects.select_related('exam', 'exam__pdf_document').get(pk=run_id)
+    except ExamRun.DoesNotExist:
+        logger.warning("student_run_pdf run_id=%s user_id=%s run_not_found", run_id, getattr(request.user, 'id', None))
+        return Response({'detail': 'Run not found'}, status=status.HTTP_404_NOT_FOUND)
+    if run.status != 'active' or run.start_at > now or run.end_at < now:
+        logger.warning("student_run_pdf run_id=%s exam_id=%s user_id=%s run_not_active_or_outside_window", run_id, run.exam_id, getattr(request.user, 'id', None))
+        return Response({'detail': 'Run is not active or outside time window'}, status=status.HTTP_403_FORBIDDEN)
+    if not _student_has_run_access(run, request.user):
+        logger.warning("student_run_pdf run_id=%s exam_id=%s user_id=%s no_access", run_id, run.exam_id, getattr(request.user, 'id', None))
+        return Response({'detail': 'You do not have access to this run'}, status=status.HTTP_403_FORBIDDEN)
+    attempt = ExamAttempt.objects.filter(exam_run=run, student=request.user).order_by('-started_at').first()
+    if not attempt:
+        logger.warning("student_run_pdf run_id=%s exam_id=%s user_id=%s no_attempt", run_id, run.exam_id, getattr(request.user, 'id', None))
+        return Response({'detail': 'Start the exam first to view the PDF'}, status=status.HTTP_403_FORBIDDEN)
+    if attempt.finished_at is not None:
+        logger.warning("student_run_pdf run_id=%s attempt_id=%s user_id=%s already_submitted", run_id, attempt.id, getattr(request.user, 'id', None))
+        return Response({'detail': 'Exam already submitted; PDF no longer available'}, status=status.HTTP_403_FORBIDDEN)
+    if attempt.status == 'RESTARTED':
+        logger.warning("student_run_pdf run_id=%s attempt_id=%s user_id=%s attempt_restarted", run_id, attempt.id, getattr(request.user, 'id', None))
+        return Response({'detail': 'This attempt was reset'}, status=status.HTTP_403_FORBIDDEN)
+    exam = run.exam
+    pdf_file = None
+    if exam.pdf_document and exam.pdf_document.file:
+        pdf_file = exam.pdf_document.file
+    elif exam.pdf_file:
+        pdf_file = exam.pdf_file
+    if not pdf_file:
+        logger.warning("student_run_pdf run_id=%s exam_id=%s user_id=%s no_pdf", run_id, run.exam_id, getattr(request.user, 'id', None))
+        return Response({'detail': 'No PDF for this exam'}, status=status.HTTP_404_NOT_FOUND)
+    try:
+        response = FileResponse(pdf_file.open('rb'), content_type='application/pdf', as_attachment=False)
+        # Remove X-Frame-Options to allow iframe embedding
+        response['X-Frame-Options'] = 'SAMEORIGIN'
+        return response
+    except Exception as e:
+        logger.exception("student_run_pdf stream error run_id=%s exam_id=%s user_id=%s: %s", run_id, run.exam_id, getattr(request.user, 'id', None), e)
+        return Response({'detail': 'Could not serve PDF'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+def _build_blueprint_bank(exam):
+    """Build attempt blueprint for BANK exam: stable option ids (option PK), shuffled display order, correctOptionId."""
+    import random
+    eqs = list(
+        ExamQuestion.objects.filter(exam=exam)
+        .select_related('question')
+        .prefetch_related('question__options')
+        .order_by('order')
+    )
+    type_order = {'MULTIPLE_CHOICE': 0, 'OPEN_SINGLE_VALUE': 1, 'OPEN_ORDERED': 1, 'OPEN_UNORDERED': 1, 'SITUATION': 2}
+    eqs.sort(key=lambda eq: (type_order.get(eq.question.type, 99), eq.order))
+    blueprint = []
+    for eq in eqs:
+        q = eq.question
+        kind = 'mc' if q.type == 'MULTIPLE_CHOICE' else ('open' if q.type != 'SITUATION' else 'situation')
+        opts = list(q.options.order_by('order'))
+        correct_option_id = None
+        if q.type == 'MULTIPLE_CHOICE' and q.correct_answer is not None:
+            try:
+                correct_option_id = int(q.correct_answer) if not isinstance(q.correct_answer, dict) else q.correct_answer.get('option_id')
+            except (TypeError, ValueError, AttributeError):
+                pass
+        if kind == 'mc' and opts:
+            random.shuffle(opts)
+            options_blueprint = [{'id': str(o.id), 'text': o.text} for o in opts]
+            correctOptionId = str(correct_option_id) if correct_option_id and any(o.id == correct_option_id for o in opts) else (str(opts[0].id) if opts else None)
+            blueprint.append({
+                'questionId': q.id,
+                'questionNumber': eq.order + 1,
+                'kind': kind,
+                'options': options_blueprint,
+                'correctOptionId': correctOptionId,
+            })
+        else:
+            blueprint.append({
+                'questionId': q.id,
+                'questionNumber': eq.order + 1,
+                'kind': kind,
+                'options': [],
+                'correctOptionId': None,
+            })
+    return blueprint
+
+
+def _build_blueprint_pdf_json(answer_key):
+    """Build attempt blueprint for PDF/JSON: stable option ids opt_1..opt_n, shuffled display order, correctOptionId."""
+    import random
+    questions_raw = answer_key.get('questions') or []
+    kind_order = {'mc': 0, 'open': 1, 'situation': 2}
+    sorted_q = sorted(questions_raw, key=lambda q: (kind_order.get((q.get('kind') or '').lower(), 99), q.get('number', 0)))
+    blueprint = []
+    for q in sorted_q:
+        num = q.get('number')
+        kind = (q.get('kind') or 'mc').lower()
+        if kind == 'mc':
+            opts = list(q.get('options') or [])
+            if opts:
+                correct_key = (str(q.get('correct') or '').strip().upper())
+                # Assign stable id per option (by original order), then shuffle display order
+                opts_with_id = [{'id': f'opt_{i+1}', 'key': (o.get('key') or '').strip().upper(), 'text': o.get('text', '')} for i, o in enumerate(opts)]
+                key_to_id = {o['key'] or o['id']: o['id'] for o in opts_with_id}
+                random.shuffle(opts_with_id)
+                options_blueprint = [{'id': o['id'], 'text': o['text']} for o in opts_with_id]
+                correctOptionId = key_to_id.get(correct_key)
+                if not correctOptionId and opts_with_id:
+                    correctOptionId = opts_with_id[0]['id']
+                blueprint.append({'questionNumber': num, 'kind': kind, 'options': options_blueprint, 'correctOptionId': correctOptionId})
+            else:
+                blueprint.append({'questionNumber': num, 'kind': kind, 'options': [], 'correctOptionId': None})
+        else:
+            blueprint.append({'questionNumber': num, 'kind': kind, 'options': [], 'correctOptionId': None})
+    return blueprint
+
+
+def _questions_data_from_blueprint(blueprint):
+    """Student-facing: from blueprint return list with only id and text for options (no correctOptionId)."""
+    out = []
+    for item in blueprint:
+        qno = item.get('questionNumber') or item.get('questionId')
+        kind = item.get('kind', 'mc')
+        opts = item.get('options') or []
+        out.append({
+            'questionNumber': qno,
+            'questionId': item.get('questionId'),
+            'number': qno,
+            'kind': kind,
+            'type': kind,
+            'options': [{'id': o.get('id'), 'text': o.get('text', '')} for o in opts],
+        })
+    return out
+
+
 def _build_pdf_json_questions(answer_key, request, shuffle_options=True):
-    """Build questions list from answer_key_json: order mc, open, situation. Shuffle MC options."""
+    """Build questions list from answer_key_json: order mc, open, situation. Shuffle MC options. (Legacy helper.)"""
     import random
     questions_raw = answer_key.get('questions') or []
     kind_order = {'mc': 0, 'open': 1, 'situation': 2}
@@ -778,79 +1124,83 @@ def student_run_start_view(request, run_id):
     try:
         run = ExamRun.objects.select_related('exam', 'exam__pdf_document').get(pk=run_id)
     except ExamRun.DoesNotExist:
+        logger.warning("student_run_start run_id=%s user_id=%s run_not_found", run_id, getattr(request.user, 'id', None))
         return Response({'detail': 'Run not found'}, status=status.HTTP_404_NOT_FOUND)
     if run.status != 'active' or run.start_at > now or run.end_at < now:
+        logger.warning("student_run_start run_id=%s exam_id=%s user_id=%s run_not_active", run_id, run.exam_id, getattr(request.user, 'id', None))
         return Response({'detail': 'Run is not active'}, status=status.HTTP_403_FORBIDDEN)
     try:
         sp = request.user.student_profile
     except Exception:
         sp = None
     if not sp:
+        logger.warning("student_run_start run_id=%s user_id=%s no_student_profile", run_id, getattr(request.user, 'id', None))
         return Response({'detail': 'Student profile required'}, status=status.HTTP_403_FORBIDDEN)
     group_ids = list(GroupStudent.objects.filter(student_profile=sp, active=True, left_at__isnull=True).values_list('group_id', flat=True))
     if run.group_id not in group_ids and run.student_id != request.user.id:
+        logger.warning("student_run_start run_id=%s exam_id=%s user_id=%s no_access", run_id, run.exam_id, getattr(request.user, 'id', None))
         return Response({'detail': 'You do not have access to this run'}, status=status.HTTP_403_FORBIDDEN)
 
     exam = run.exam
-    existing = ExamAttempt.objects.filter(exam_run=run, student=request.user).exclude(status='RESTARTED').order_by('-started_at').first()
-    attempt = None
-    if existing:
-        if existing.finished_at:
-            return Response({'detail': 'Already submitted', 'attemptId': existing.id, 'status': 'SUBMITTED'}, status=status.HTTP_400_BAD_REQUEST)
-        if existing.expires_at and now > existing.expires_at:
-            existing.status = 'EXPIRED'
-            existing.save(update_fields=['status'])
-            return Response({'attemptId': existing.id, 'status': 'EXPIRED', 'questions': [], 'canvases': []})
-        attempt = existing
-    else:
-        expires_at = run.end_at
-        attempt = ExamAttempt.objects.create(
-            exam=exam,
-            exam_run=run,
-            student=request.user,
-            expires_at=expires_at,
-            duration_minutes=run.duration_minutes,
-            status='IN_PROGRESS',
-        )
+    try:
+        existing = ExamAttempt.objects.filter(exam_run=run, student=request.user).exclude(status='RESTARTED').order_by('-started_at').first()
+        attempt = None
+        if existing:
+            if existing.finished_at:
+                logger.warning("student_run_start run_id=%s attempt_id=%s user_id=%s already_submitted", run_id, existing.id, getattr(request.user, 'id', None))
+                return Response({'detail': 'Already submitted', 'attemptId': existing.id, 'status': 'SUBMITTED'}, status=status.HTTP_400_BAD_REQUEST)
+            if existing.expires_at and now > existing.expires_at:
+                existing.status = 'EXPIRED'
+                existing.save(update_fields=['status'])
+                return Response({'attemptId': existing.id, 'status': 'EXPIRED', 'questions': [], 'canvases': []})
+            attempt = existing
+        else:
+            expires_at = run.end_at
+            attempt = ExamAttempt.objects.create(
+                exam=exam,
+                exam_run=run,
+                student=request.user,
+                expires_at=expires_at,
+                duration_minutes=run.duration_minutes,
+                status='IN_PROGRESS',
+            )
 
-    # Build response by source type
-    questions_data = []
-    canvases_data = []
-    pdf_url = None
-
-    if exam.source_type == 'BANK':
-        eqs = list(ExamQuestion.objects.filter(exam=exam).select_related('question').prefetch_related('question__options').order_by('order'))
-        # Order: closed, open, situation
-        type_order = {'MULTIPLE_CHOICE': 0, 'OPEN_SINGLE_VALUE': 1, 'OPEN_ORDERED': 1, 'OPEN_UNORDERED': 1, 'SITUATION': 2}
-        eqs.sort(key=lambda eq: (type_order.get(eq.question.type, 99), eq.order))
-        for eq in eqs:
-            q = eq.question
-            opts = list(q.options.order_by('order').values('id', 'text', 'order'))
-            if q.type == 'MULTIPLE_CHOICE' and opts:
-                random.shuffle(opts)
-            questions_data.append({
-                'examQuestionId': eq.id,
-                'questionId': q.id,
-                'questionNumber': q.id,
-                'order': eq.order,
-                'text': q.text,
-                'type': q.type,
-                'kind': 'mc' if q.type == 'MULTIPLE_CHOICE' else ('open' if q.type != 'SITUATION' else 'situation'),
-                'options': [{'id': o['id'], 'text': o['text'], 'order': o['order']} for o in opts],
-            })
-        for c in ExamAttemptCanvas.objects.filter(attempt=attempt).select_related('question'):
-            canvases_data.append(_build_canvas_response(c, request))
-    else:
-        # PDF or JSON
-        if exam.pdf_document and exam.pdf_document.file:
-            if request:
-                pdf_url = request.build_absolute_uri(exam.pdf_document.file.url)
+        # Ensure attempt has a frozen blueprint (build once per attempt; never expose correctOptionId to student)
+        if not attempt.attempt_blueprint:
+            if exam.source_type == 'BANK':
+                attempt.attempt_blueprint = _build_blueprint_bank(exam)
             else:
-                pdf_url = exam.pdf_document.file.url
-        ak = exam.answer_key_json or {}
-        questions_data = _build_pdf_json_questions(ak, request, shuffle_options=True)
-        for c in ExamAttemptCanvas.objects.filter(attempt=attempt):
-            canvases_data.append({
+                attempt.attempt_blueprint = _build_blueprint_pdf_json(exam.answer_key_json or {})
+            # Save question order and option order for grading accuracy
+            question_order = []
+            option_order = {}
+            for item in (attempt.attempt_blueprint or []):
+                qno = item.get('questionNumber') or item.get('questionId')
+                if qno is not None:
+                    question_order.append(qno)
+                    opts = item.get('options') or []
+                    if opts:
+                        option_order[str(qno)] = [opt.get('id') for opt in opts]
+            attempt.question_order = question_order
+            attempt.option_order = option_order
+            attempt.save(update_fields=['attempt_blueprint', 'question_order', 'option_order'])
+
+        # Build response from blueprint: only qno, kind, options (id + text) — never answer_key_json or correct
+        questions_data = _questions_data_from_blueprint(attempt.attempt_blueprint or [])
+    # Add examQuestionId for BANK where needed (for backward compat)
+        if exam.source_type == 'BANK' and attempt.attempt_blueprint:
+            eqs = list(ExamQuestion.objects.filter(exam=exam).select_related('question').order_by('order'))
+            type_order = {'MULTIPLE_CHOICE': 0, 'OPEN_SINGLE_VALUE': 1, 'OPEN_ORDERED': 1, 'OPEN_UNORDERED': 1, 'SITUATION': 2}
+            eqs.sort(key=lambda eq: (type_order.get(eq.question.type, 99), eq.order))
+            for i, item in enumerate(questions_data):
+                if i < len(eqs):
+                    item['examQuestionId'] = eqs[i].id
+                    item['order'] = eqs[i].order
+                    item['text'] = eqs[i].question.text
+
+        canvases_data = []
+        for c in ExamAttemptCanvas.objects.filter(attempt=attempt).order_by('situation_index', 'question_id'):
+            canvases_data.append(_build_canvas_response(c, request) or {
                 'canvasId': c.id,
                 'questionId': c.question_id,
                 'situationIndex': c.situation_index,
@@ -858,20 +1208,34 @@ def student_run_start_view(request, run_id):
                 'imageUrl': request.build_absolute_uri(c.image.url) if c.image and request else (c.image.url if c.image else None),
             })
 
-    return Response({
-        'attemptId': attempt.id,
-        'examId': exam.id,
-        'runId': run.id,
-        'title': exam.title,
-        'status': attempt.status,
-        'sourceType': exam.source_type,
-        'pdfUrl': pdf_url,
-        'startedAt': attempt.started_at.isoformat(),
-        'expiresAt': attempt.expires_at.isoformat() if attempt.expires_at else None,
-        'endTime': run.end_at.isoformat(),
-        'questions': questions_data,
-        'canvases': canvases_data,
-    })
+        # Protected PDF URL only (no raw MEDIA); frontend will GET this URL to display PDF
+        pdf_url = None
+        if exam.source_type in ('PDF', 'JSON') and (exam.pdf_document and exam.pdf_document.file or exam.pdf_file):
+            if request:
+                pdf_url = request.build_absolute_uri(f'/api/student/runs/{run.id}/pdf')
+            else:
+                pdf_url = f'/api/student/runs/{run.id}/pdf'
+
+        return Response({
+            'attemptId': attempt.id,
+            'examId': exam.id,
+            'runId': run.id,
+            'title': exam.title,
+            'status': attempt.status,
+            'sourceType': exam.source_type,
+            'pdfUrl': pdf_url,
+            'startedAt': attempt.started_at.isoformat(),
+            'expiresAt': attempt.expires_at.isoformat() if attempt.expires_at else None,
+            'endTime': run.end_at.isoformat(),
+            'questions': questions_data,
+            'canvases': canvases_data,
+        })
+    except Exception as e:
+        logger.exception(
+            "student_run_start error run_id=%s exam_id=%s user_id=%s: %s",
+            run_id, run.exam_id, getattr(request.user, 'id', None), e
+        )
+        return Response({'detail': 'Could not start exam'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # ---------- Student: Start exam (create attempt, return questions; do NOT send correct_answer) ----------
@@ -964,6 +1328,7 @@ def student_exam_submit_view(request, exam_id):
     try:
         exam = Exam.objects.get(pk=exam_id)
     except Exam.DoesNotExist:
+        logger.warning("student_exam_submit exam_id=%s user_id=%s exam_not_found", exam_id, getattr(request.user, 'id', None))
         return Response({'detail': 'Exam not found'}, status=status.HTTP_404_NOT_FOUND)
     attempt_id = request.data.get('attemptId') or request.data.get('attempt_id')
     answers_payload = request.data.get('answers') or request.data.get('answers_list') or []
@@ -974,13 +1339,16 @@ def student_exam_submit_view(request, exam_id):
             pk=attempt_id, exam=exam, student=request.user
         )
     except ExamAttempt.DoesNotExist:
+        logger.warning("student_exam_submit exam_id=%s attempt_id=%s user_id=%s attempt_not_found", exam_id, attempt_id, getattr(request.user, 'id', None))
         return Response({'detail': 'Attempt not found'}, status=status.HTTP_404_NOT_FOUND)
     if attempt.finished_at is not None:
+        logger.warning("student_exam_submit exam_id=%s attempt_id=%s user_id=%s already_submitted", exam_id, attempt.id, getattr(request.user, 'id', None))
         return Response({'detail': 'Already submitted'}, status=status.HTTP_400_BAD_REQUEST)
     now = _now()
     if attempt.expires_at and now > attempt.expires_at:
         attempt.status = 'EXPIRED'
         attempt.save(update_fields=['status'])
+        logger.warning("student_exam_submit exam_id=%s attempt_id=%s user_id=%s time_expired", exam_id, attempt.id, getattr(request.user, 'id', None))
         return Response({'detail': 'Time has expired'}, status=status.HTTP_400_BAD_REQUEST)
 
     answers_by_question_id = {}
@@ -1003,99 +1371,166 @@ def student_exam_submit_view(request, exam_id):
 
     is_quiz = exam.type == 'quiz'
     if is_quiz:
+        # QUIZ: 15 questions = 100 points, each question = 100/15
         pts_per_auto = Decimal('100') / 15
         max_score = Decimal('100')
     else:
-        total_units = 22 + 5 + 3 * 2
-        pts_per_auto = Decimal('150') / total_units
+        # İMTAHAN: 27 normal questions (x each) + 3 situasiya (2x each) = 27x + 6x = 33x = 150
+        # So x = 150/33
+        total_units = 27 + (3 * 2)  # 27 normal + 3 situasiya (each worth 2 units)
+        pts_per_auto = Decimal('150') / Decimal('33')
         max_score = Decimal('150')
 
     total_score = Decimal('0')
 
-    with transaction.atomic():
-        if exam.source_type in ('PDF', 'JSON') and exam.answer_key_json and isinstance(exam.answer_key_json, dict):
-            questions_list = exam.answer_key_json.get('questions') or []
-            kind_order = {'mc': 0, 'open': 1, 'situation': 2}
-            sorted_q = sorted(questions_list, key=lambda q: (kind_order.get((q.get('kind') or '').lower(), 99), q.get('number', 0)))
-            for q_def in sorted_q:
-                num = q_def.get('number')
-                kind = (q_def.get('kind') or 'mc').lower()
-                ans = answers_by_question_number.get(num) or answers_by_question_number.get(int(num) if num is not None else None) or {}
-                selected_key = (ans.get('selectedOptionKey') or ans.get('selected_option_key') or '').strip().upper()
-                text_answer = (ans.get('textAnswer') or ans.get('text_answer') or '').strip()
-                requires_manual = False
-                auto_score = Decimal('0')
-                if kind == 'mc':
-                    correct_key = (str(q_def.get('correct') or '').strip().upper())
-                    if correct_key and selected_key and selected_key == correct_key:
-                        auto_score = pts_per_auto
-                elif kind == 'open':
-                    rule = (q_def.get('open_rule') or 'EXACT_MATCH').strip().upper()
-                    open_ans = q_def.get('open_answer')
-                    if open_ans is not None and rule:
-                        if evaluate_open_single_value(text_answer, open_ans, rule):
-                            auto_score = pts_per_auto
+    try:
+        with transaction.atomic():
+            blueprint = attempt.attempt_blueprint or []
+            if exam.source_type in ('PDF', 'JSON') and (blueprint or (exam.answer_key_json and isinstance(exam.answer_key_json, dict))):
+                # Prefer blueprint for grading (correctOptionId); fallback to answer_key_json
+                if blueprint:
+                    for item in blueprint:
+                        num = item.get('questionNumber')
+                        kind = (item.get('kind') or 'mc').lower()
+                        ans = answers_by_question_number.get(num) or answers_by_question_number.get(int(num) if num is not None else None) or {}
+                        selected_id = (ans.get('selectedOptionId') or ans.get('selected_option_id'))
+                        if selected_id is not None:
+                            selected_id = str(selected_id).strip()
+                        selected_key = (ans.get('selectedOptionKey') or ans.get('selected_option_key') or '').strip().upper()
+                        text_answer = (ans.get('textAnswer') or ans.get('text_answer') or '').strip()
+                        requires_manual = False
+                        auto_score = Decimal('0')
+                        if kind == 'mc':
+                            correct_option_id = item.get('correctOptionId')
+                            if correct_option_id and selected_id and str(selected_id).strip() == str(correct_option_id).strip():
+                                auto_score = pts_per_auto
+                        elif kind == 'open':
+                            ak = exam.answer_key_json or {}
+                            q_def = next((x for x in (ak.get('questions') or []) if x.get('number') == num), {})
+                            rule = (q_def.get('open_rule') or 'EXACT_MATCH').strip().upper()
+                            open_ans = q_def.get('open_answer')
+                            if open_ans is not None and rule and evaluate_open_single_value(text_answer, open_ans, rule):
+                                auto_score = pts_per_auto
+                        else:
+                            requires_manual = True
+                        total_score += auto_score
+                        ExamAnswer.objects.create(
+                            attempt=attempt,
+                            question=None,
+                            question_number=num,
+                            selected_option_key=selected_key or None,
+                            text_answer=text_answer or None,
+                            auto_score=auto_score,
+                            requires_manual_check=requires_manual,
+                        )
                 else:
-                    requires_manual = True
-                total_score += auto_score
-                ExamAnswer.objects.create(
-                    attempt=attempt,
-                    question=None,
-                    question_number=num,
-                    selected_option_key=selected_key or None,
-                    text_answer=text_answer or None,
-                    auto_score=auto_score,
-                    requires_manual_check=requires_manual,
-                )
-        else:
-            eqs = list(ExamQuestion.objects.filter(exam=exam).select_related('question').prefetch_related('question__options').order_by('order'))
-            for eq in eqs:
-                q = eq.question
-                ans = answers_by_question_id.get(q.id) or {}
-                selected_option_id = ans.get('selectedOptionId') or ans.get('selected_option_id')
-                text_answer = ans.get('textAnswer') or ans.get('text_answer') or ''
-                requires_manual = False
-                auto_score = Decimal('0')
-                if q.type == 'MULTIPLE_CHOICE':
-                    correct_id = None
-                    if isinstance(q.correct_answer, dict) and 'option_id' in q.correct_answer:
-                        correct_id = q.correct_answer.get('option_id')
-                    elif isinstance(q.correct_answer, (int, float)):
-                        correct_id = int(q.correct_answer)
-                    if correct_id is not None and selected_option_id is not None:
-                        if int(selected_option_id) == int(correct_id):
-                            auto_score = pts_per_auto
-                elif q.type in ('OPEN_SINGLE_VALUE', 'OPEN_ORDERED', 'OPEN_UNORDERED'):
-                    rule = q.answer_rule_type
-                    if not rule and q.type == 'OPEN_ORDERED':
-                        rule = 'ORDERED_DIGITS'
-                    elif not rule and q.type == 'OPEN_UNORDERED':
-                        rule = 'UNORDERED_DIGITS'
-                    if rule and q.correct_answer is not None:
-                        if evaluate_open_single_value(text_answer, q.correct_answer, rule):
-                            auto_score = pts_per_auto
-                elif q.type == 'SITUATION':
-                    requires_manual = True
-                total_score += auto_score
-                ExamAnswer.objects.create(
-                    attempt=attempt,
-                    question=q,
-                    selected_option_id=int(selected_option_id) if selected_option_id is not None else None,
-                    text_answer=text_answer or None,
-                    auto_score=auto_score,
-                    requires_manual_check=requires_manual,
-                )
-        attempt.finished_at = now
-        attempt.auto_score = total_score
-        attempt.status = 'SUBMITTED'
-        attempt.save(update_fields=['finished_at', 'auto_score', 'status'])
+                    questions_list = exam.answer_key_json.get('questions') or []
+                    kind_order = {'mc': 0, 'open': 1, 'situation': 2}
+                    sorted_q = sorted(questions_list, key=lambda q: (kind_order.get((q.get('kind') or '').lower(), 99), q.get('number', 0)))
+                    for q_def in sorted_q:
+                        num = q_def.get('number')
+                        kind = (q_def.get('kind') or 'mc').lower()
+                        ans = answers_by_question_number.get(num) or answers_by_question_number.get(int(num) if num is not None else None) or {}
+                        selected_key = (ans.get('selectedOptionKey') or ans.get('selected_option_key') or '').strip().upper()
+                        text_answer = (ans.get('textAnswer') or ans.get('text_answer') or '').strip()
+                        requires_manual = False
+                        auto_score = Decimal('0')
+                        if kind == 'mc':
+                            correct_key = (str(q_def.get('correct') or '').strip().upper())
+                            if correct_key and selected_key and selected_key == correct_key:
+                                auto_score = pts_per_auto
+                        elif kind == 'open':
+                            rule = (q_def.get('open_rule') or 'EXACT_MATCH').strip().upper()
+                            open_ans = q_def.get('open_answer')
+                            if open_ans is not None and rule:
+                                if evaluate_open_single_value(text_answer, open_ans, rule):
+                                    auto_score = pts_per_auto
+                        else:
+                            requires_manual = True
+                        total_score += auto_score
+                        ExamAnswer.objects.create(
+                            attempt=attempt,
+                            question=None,
+                            question_number=num,
+                            selected_option_key=selected_key or None,
+                            text_answer=text_answer or None,
+                            auto_score=auto_score,
+                            requires_manual_check=requires_manual,
+                        )
+            else:
+                # BANK: use blueprint correctOptionId when available, else question.correct_answer
+                eqs = list(ExamQuestion.objects.filter(exam=exam).select_related('question').prefetch_related('question__options').order_by('order'))
+                type_order = {'MULTIPLE_CHOICE': 0, 'OPEN_SINGLE_VALUE': 1, 'OPEN_ORDERED': 1, 'OPEN_UNORDERED': 1, 'SITUATION': 2}
+                eqs.sort(key=lambda eq: (type_order.get(eq.question.type, 99), eq.order))
+                blueprint_by_qid = {}
+                if blueprint:
+                    for b in blueprint:
+                        qid = b.get('questionId')
+                        if qid is not None:
+                            blueprint_by_qid[qid] = b
+                for eq in eqs:
+                    q = eq.question
+                    ans = answers_by_question_id.get(q.id) or {}
+                    selected_option_id = ans.get('selectedOptionId') or ans.get('selected_option_id')
+                    text_answer = (ans.get('textAnswer') or ans.get('text_answer') or '').strip()
+                    requires_manual = False
+                    auto_score = Decimal('0')
+                    if q.type == 'MULTIPLE_CHOICE':
+                        correct_id = None
+                        bp = blueprint_by_qid.get(q.id)
+                        if bp and bp.get('correctOptionId') is not None:
+                            correct_id = bp.get('correctOptionId')
+                            try:
+                                correct_id = int(correct_id)
+                            except (TypeError, ValueError):
+                                pass
+                        if correct_id is None and q.correct_answer is not None:
+                            if isinstance(q.correct_answer, dict) and 'option_id' in q.correct_answer:
+                                correct_id = q.correct_answer.get('option_id')
+                            elif isinstance(q.correct_answer, (int, float)):
+                                correct_id = int(q.correct_answer)
+                        if correct_id is not None and selected_option_id is not None:
+                            if str(selected_option_id).strip() == str(correct_id).strip():
+                                auto_score = pts_per_auto
+                    elif q.type in ('OPEN_SINGLE_VALUE', 'OPEN_ORDERED', 'OPEN_UNORDERED'):
+                        rule = q.answer_rule_type
+                        if not rule and q.type == 'OPEN_ORDERED':
+                            rule = 'ORDERED_DIGITS'
+                        elif not rule and q.type == 'OPEN_UNORDERED':
+                            rule = 'UNORDERED_DIGITS'
+                        if rule and q.correct_answer is not None:
+                            if evaluate_open_single_value(text_answer, q.correct_answer, rule):
+                                auto_score = pts_per_auto
+                    elif q.type == 'SITUATION':
+                        requires_manual = True
+                    total_score += auto_score
+                    ExamAnswer.objects.create(
+                        attempt=attempt,
+                        question=q,
+                        selected_option_id=int(selected_option_id) if selected_option_id is not None else None,
+                        text_answer=text_answer or None,
+                        auto_score=auto_score,
+                        requires_manual_check=requires_manual,
+                    )
+            attempt.finished_at = now
+            attempt.auto_score = total_score
+            attempt.total_score = total_score  # Will be updated when manual grading is done
+            attempt.status = 'SUBMITTED'
+            attempt.is_visible_to_student = False  # Lock attempt after submission
+            attempt.save(update_fields=['finished_at', 'auto_score', 'total_score', 'status', 'is_visible_to_student'])
 
-    return Response({
-        'attemptId': attempt.id,
-        'autoScore': float(total_score),
-        'maxScore': float(max_score),
-        'finishedAt': attempt.finished_at.isoformat(),
-    }, status=status.HTTP_200_OK)
+        return Response({
+            'attemptId': attempt.id,
+            'autoScore': float(total_score),
+            'maxScore': float(max_score),
+            'finishedAt': attempt.finished_at.isoformat(),
+        }, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.exception(
+            "student_exam_submit error exam_id=%s attempt_id=%s user_id=%s: %s",
+            exam_id, attempt.id, getattr(request.user, 'id', None), e
+        )
+        return Response({'detail': 'Could not submit'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # ---------- Student: Save canvas (SITUATION question drawing) ----------
@@ -1178,7 +1613,7 @@ def student_exam_result_view(request, exam_id, attempt_id):
         return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
     if attempt.finished_at is None:
         return Response({'detail': 'Attempt not submitted yet'}, status=status.HTTP_400_BAD_REQUEST)
-    if not attempt.exam.is_result_published:
+    if not attempt.exam.is_result_published and not attempt.is_result_published:
         return Response({
             'attemptId': attempt.id,
             'examId': attempt.exam_id,
@@ -1187,6 +1622,7 @@ def student_exam_result_view(request, exam_id, attempt_id):
             'message': 'Müəllim yoxlaması gözlənilir',
             'autoScore': None,
             'manualScore': None,
+            'totalScore': None,
             'score': None,
             'maxScore': float(attempt.exam.max_score or 150),
             'finishedAt': attempt.finished_at.isoformat() if attempt.finished_at else None,
@@ -1195,7 +1631,8 @@ def student_exam_result_view(request, exam_id, attempt_id):
         }, status=status.HTTP_200_OK)
     manual = attempt.manual_score
     auto = attempt.auto_score
-    score = manual if manual is not None else auto
+    total = float(attempt.total_score) if attempt.total_score is not None else (float(auto or 0) + float(manual or 0))
+    max_s = float(attempt.exam.max_score or 150)
     return Response({
         'attemptId': attempt.id,
         'examId': attempt.exam_id,
@@ -1203,8 +1640,9 @@ def student_exam_result_view(request, exam_id, attempt_id):
         'status': 'published',
         'autoScore': float(attempt.auto_score or 0),
         'manualScore': float(manual) if manual is not None else None,
-        'score': float(score) if score is not None else None,
-        'maxScore': float(attempt.exam.max_score or 150),
+        'totalScore': min(total, max_s),
+        'score': min(total, max_s),
+        'maxScore': max_s,
         'finishedAt': attempt.finished_at.isoformat() if attempt.finished_at else None,
         'questions': [],
         'canvases': [],
@@ -1215,8 +1653,9 @@ def student_exam_result_view(request, exam_id, attempt_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsTeacher])
 def teacher_exam_attempts_view(request, exam_id):
-    """List attempts for an exam, filterable by group and status."""
+    """List attempts for an exam, grouped by runs if assigned to groups."""
     from django.conf import settings
+    from django.db.models import Count, Q
     try:
         qs = Exam.objects.filter(pk=exam_id)
         if not getattr(settings, 'SINGLE_TENANT', True):
@@ -1227,62 +1666,138 @@ def teacher_exam_attempts_view(request, exam_id):
     
     group_id = request.query_params.get('groupId') or request.query_params.get('group_id')
     status_filter = request.query_params.get('status', '').strip()
-    
-    qs = ExamAttempt.objects.filter(exam=exam).select_related('student', 'student__student_profile').order_by('-started_at')
     show_archived = request.query_params.get('showArchived', 'false').lower() == 'true'
-    if not show_archived:
-        qs = qs.filter(is_archived=False)
     
-    group_obj = None
+    # Check if exam is assigned to groups or individual students
+    runs = ExamRun.objects.filter(exam=exam).select_related('group', 'student').annotate(
+        attempt_count=Count('attempts', filter=Q(attempts__is_archived=False))
+    ).order_by('-start_at')
+    
     if group_id:
         try:
             gs = Group.objects.filter(pk=int(group_id))
             if not getattr(settings, 'SINGLE_TENANT', True):
                 gs = gs.filter(created_by=request.user)
             group_obj = gs.get()
-            student_ids = list(group_obj.group_students.filter(active=True, left_at__isnull=True).values_list('student_profile__user_id', flat=True))
-            qs = qs.filter(student_id__in=student_ids)
+            runs = runs.filter(group=group_obj)
         except (Group.DoesNotExist, ValueError):
             pass
     
-    if status_filter == 'submitted':
-        qs = qs.filter(finished_at__isnull=False)
-    elif status_filter == 'waiting_manual':
-        qs = qs.filter(finished_at__isnull=False).filter(
-            answers__requires_manual_check=True
-        ).distinct()
-    elif status_filter == 'graded':
-        qs = qs.filter(manual_score__isnull=False, is_checked=True)
-    elif status_filter == 'published':
-        qs = qs.filter(is_checked=True).filter(exam__is_result_published=True)
-    
-    attempts_data = []
-    for attempt in qs:
-        manual_pending = ExamAnswer.objects.filter(attempt=attempt, requires_manual_check=True).count()
-        final_score = float(attempt.manual_score) if attempt.manual_score is not None else float(attempt.auto_score or 0)
-        gid = group_obj.id if group_obj else None
-        gname = group_obj.name if group_obj else None
-        attempts_data.append({
-            'id': attempt.id,
-            'studentId': attempt.student.id,
-            'studentName': attempt.student.full_name,
-            'groupId': gid,
-            'groupName': gname,
-            'status': 'SUBMITTED' if attempt.finished_at else (getattr(attempt, 'status', None) or 'IN_PROGRESS'),
-            'startedAt': attempt.started_at.isoformat(),
-            'finishedAt': attempt.finished_at.isoformat() if attempt.finished_at else None,
-            'submittedAt': attempt.finished_at.isoformat() if attempt.finished_at else None,
-            'autoScore': float(attempt.auto_score or 0),
-            'manualScore': float(attempt.manual_score) if attempt.manual_score is not None else None,
-            'finalScore': final_score,
-            'maxScore': float(exam.max_score or (100 if exam.type == 'quiz' else 150)),
-            'manualPendingCount': manual_pending,
-            'isChecked': attempt.is_checked,
-            'isPublished': exam.is_result_published and attempt.is_checked,
-            'isArchived': attempt.is_archived,
+    # Group attempts by run
+    runs_data = []
+    for run in runs:
+        qs_attempts = ExamAttempt.objects.filter(exam_run=run).select_related('student', 'student__student_profile')
+        if not show_archived:
+            qs_attempts = qs_attempts.filter(is_archived=False)
+        
+        if status_filter == 'submitted':
+            qs_attempts = qs_attempts.filter(finished_at__isnull=False)
+        elif status_filter == 'waiting_manual':
+            qs_attempts = qs_attempts.filter(finished_at__isnull=False).filter(
+                answers__requires_manual_check=True
+            ).distinct()
+        elif status_filter == 'graded':
+            qs_attempts = qs_attempts.filter(manual_score__isnull=False, is_checked=True)
+        elif status_filter == 'published':
+            qs_attempts = qs_attempts.filter(is_checked=True).filter(exam__is_result_published=True)
+        
+        attempts_data = []
+        for attempt in qs_attempts.order_by('-started_at'):
+            manual_pending = ExamAnswer.objects.filter(attempt=attempt, requires_manual_check=True).count()
+            auto_s = float(attempt.auto_score or 0)
+            manual_s = float(attempt.manual_score or 0) if attempt.manual_score is not None else 0
+            final_score = float(attempt.total_score) if attempt.total_score is not None else (auto_s + manual_s)
+            max_s = float(exam.max_score or (100 if exam.type == 'quiz' else 150))
+            attempts_data.append({
+                'id': attempt.id,
+                'studentId': attempt.student.id,
+                'studentName': attempt.student.full_name,
+                'status': 'SUBMITTED' if attempt.finished_at else (getattr(attempt, 'status', None) or 'IN_PROGRESS'),
+                'startedAt': attempt.started_at.isoformat(),
+                'finishedAt': attempt.finished_at.isoformat() if attempt.finished_at else None,
+                'submittedAt': attempt.finished_at.isoformat() if attempt.finished_at else None,
+                'autoScore': auto_s,
+                'manualScore': float(attempt.manual_score) if attempt.manual_score is not None else None,
+                'finalScore': min(final_score, max_s),
+                'maxScore': max_s,
+                'manualPendingCount': manual_pending,
+                'isChecked': attempt.is_checked,
+                'isPublished': attempt.is_result_published,
+                'isArchived': attempt.is_archived,
+            })
+        
+        runs_data.append({
+            'runId': run.id,
+            'examId': exam.id,
+            'examTitle': exam.title,
+            'groupName': run.group.name if run.group else None,
+            'studentName': run.student.full_name if run.student else None,
+            'startAt': run.start_at.isoformat(),
+            'endAt': run.end_at.isoformat(),
+            'durationMinutes': run.duration_minutes,
+            'status': run.status,
+            'attemptCount': run.attempt_count,
+            'attempts': attempts_data,
         })
     
-    return Response({'attempts': attempts_data})
+    # If no runs exist, fallback to old behavior (attempts without runs)
+    if not runs_data:
+        qs = ExamAttempt.objects.filter(exam=exam, exam_run__isnull=True).select_related('student', 'student__student_profile').order_by('-started_at')
+        if not show_archived:
+            qs = qs.filter(is_archived=False)
+        
+        group_obj = None
+        if group_id:
+            try:
+                gs = Group.objects.filter(pk=int(group_id))
+                if not getattr(settings, 'SINGLE_TENANT', True):
+                    gs = gs.filter(created_by=request.user)
+                group_obj = gs.get()
+                student_ids = list(group_obj.group_students.filter(active=True, left_at__isnull=True).values_list('student_profile__user_id', flat=True))
+                qs = qs.filter(student_id__in=student_ids)
+            except (Group.DoesNotExist, ValueError):
+                pass
+        
+        if status_filter == 'submitted':
+            qs = qs.filter(finished_at__isnull=False)
+        elif status_filter == 'waiting_manual':
+            qs = qs.filter(finished_at__isnull=False).filter(
+                answers__requires_manual_check=True
+            ).distinct()
+        elif status_filter == 'graded':
+            qs = qs.filter(manual_score__isnull=False, is_checked=True)
+        elif status_filter == 'published':
+            qs = qs.filter(is_checked=True).filter(exam__is_result_published=True)
+        
+        attempts_data = []
+        for attempt in qs:
+            manual_pending = ExamAnswer.objects.filter(attempt=attempt, requires_manual_check=True).count()
+            auto_s = float(attempt.auto_score or 0)
+            manual_s = float(attempt.manual_score or 0) if attempt.manual_score is not None else 0
+            final_score = float(attempt.total_score) if attempt.total_score is not None else (auto_s + manual_s)
+            max_s = float(exam.max_score or (100 if exam.type == 'quiz' else 150))
+            attempts_data.append({
+                'id': attempt.id,
+                'studentId': attempt.student.id,
+                'studentName': attempt.student.full_name,
+                'groupId': group_obj.id if group_obj else None,
+                'groupName': group_obj.name if group_obj else None,
+                'status': 'SUBMITTED' if attempt.finished_at else (getattr(attempt, 'status', None) or 'IN_PROGRESS'),
+                'startedAt': attempt.started_at.isoformat(),
+                'finishedAt': attempt.finished_at.isoformat() if attempt.finished_at else None,
+                'submittedAt': attempt.finished_at.isoformat() if attempt.finished_at else None,
+                'autoScore': auto_s,
+                'manualScore': float(attempt.manual_score) if attempt.manual_score is not None else None,
+                'finalScore': min(final_score, max_s),
+                'maxScore': max_s,
+                'manualPendingCount': manual_pending,
+                'isChecked': attempt.is_checked,
+                'isPublished': attempt.is_result_published,
+                'isArchived': attempt.is_archived,
+            })
+        return Response({'attempts': attempts_data})
+    
+    return Response({'runs': runs_data})
 
 
 @api_view(['POST'])
@@ -1383,6 +1898,11 @@ def teacher_attempt_detail_view(request, attempt_id):
             rec['situationIndex'] = c.situation_index
         canvases_data.append(rec)
 
+    # Get PDF URL if exam is PDF/JSON and attempt has a run
+    pdf_url = None
+    if attempt.exam_run and attempt.exam.source_type in ('PDF', 'JSON'):
+        pdf_url = request.build_absolute_uri(f'/api/student/runs/{attempt.exam_run.id}/pdf')
+    
     return Response({
         'attemptId': attempt.id,
         'examId': attempt.exam.id,
@@ -1390,34 +1910,69 @@ def teacher_attempt_detail_view(request, attempt_id):
         'sourceType': attempt.exam.source_type,
         'studentId': attempt.student.id,
         'studentName': attempt.student.full_name,
+        'runId': attempt.exam_run.id if attempt.exam_run else None,
+        'pdfUrl': pdf_url,
         'startedAt': attempt.started_at.isoformat(),
         'finishedAt': attempt.finished_at.isoformat() if attempt.finished_at else None,
         'autoScore': float(attempt.auto_score or 0),
         'manualScore': float(attempt.manual_score) if attempt.manual_score is not None else None,
         'maxScore': float(attempt.exam.max_score or (100 if attempt.exam.type == 'quiz' else 150)),
+        'attemptBlueprint': attempt.attempt_blueprint,
         'answers': answers_data,
         'canvases': canvases_data,
+        'situationScoringSet': 'SET2',  # Use SET2: [0, 2/3, 1, 4/3, 2]
     })
 
 
-def _situation_fraction_to_points(fraction, is_quiz, max_situation_points=None):
-    """Map fraction 0, 2/3, 1, 4/3, 2 to points. One situation full = 1 * unit; 2x weight = 2*unit."""
-    if max_situation_points is not None:
-        unit = max_situation_points
-    else:
-        unit = Decimal('100') / 15 if is_quiz else (Decimal('150') / (22 + 5 + 3 * 2)) * 2
-    if fraction in (0, '0'):
+# Option Set 1 (default): multipliers apply to situation max only. Quiz=100, Exam=150; exam units = 22+5+3*2 = 33.
+SITUATION_MULTIPLIERS_SET1 = (0, 1/3, 1/2, 2/3, 1)
+SITUATION_MULTIPLIERS_SET2 = (0, 2/3, 1, 4/3, 2)
+
+
+def _situation_max_per_question(is_quiz):
+    """Strict unit-based: situation max = 2 units. Exam total units 33, so 150/33*2 per situation."""
+    if is_quiz:
+        return Decimal('0')  # quiz has 0 situation
+    # İMTAHAN: 150/33 per unit, situasiya = 2 units, so 150/33*2
+    return (Decimal('150') / Decimal('33')) * Decimal('2')
+
+
+def _situation_fraction_to_points(fraction, is_quiz, max_situation_points=None, use_set2=False):
+    """
+    Option Set 1: fraction in [0, 1/3, 1/2, 2/3, 1]. Points = situation_max_per_question * fraction.
+    Option Set 2: fraction in [0, 2/3, 1, 4/3, 2]. Points = situation_max_per_question * fraction.
+    """
+    situation_max = max_situation_points if max_situation_points is not None else _situation_max_per_question(is_quiz)
+    if situation_max == 0:
         return Decimal('0')
-    if fraction in (2/3, '2/3', 0.667):
-        return (unit * 2 / 3).quantize(Decimal('0.01'))
-    if fraction in (1, '1'):
-        return unit
-    if fraction in (4/3, '4/3', 1.333):
-        return (unit * 4 / 3).quantize(Decimal('0.01'))
-    if fraction in (2, '2'):
-        return (unit * 2).quantize(Decimal('0.01'))
+    
+    if use_set2:
+        # SET2: [0, 2/3, 1, 4/3, 2]
+        if fraction in (0, '0'):
+            return Decimal('0')
+        if fraction in (2/3, '2/3', 0.667, '0.667'):
+            return (Decimal('2') / Decimal('3') * situation_max).quantize(Decimal('0.01'))
+        if fraction in (1, '1'):
+            return situation_max.quantize(Decimal('0.01'))
+        if fraction in (4/3, '4/3', 1.333, '1.333'):
+            return (Decimal('4') / Decimal('3') * situation_max).quantize(Decimal('0.01'))
+        if fraction in (2, '2'):
+            return (Decimal('2') * situation_max).quantize(Decimal('0.01'))
+    else:
+        # SET1: [0, 1/3, 1/2, 2/3, 1]
+        if fraction in (0, '0'):
+            return Decimal('0')
+        if fraction in (1/3, '1/3', 0.333):
+            return (Decimal('1') / Decimal('3') * situation_max).quantize(Decimal('0.01'))
+        if fraction in (1/2, '1/2', 0.5):
+            return (Decimal('1') / Decimal('2') * situation_max).quantize(Decimal('0.01'))
+        if fraction in (2/3, '2/3', 0.667):
+            return (Decimal('2') / Decimal('3') * situation_max).quantize(Decimal('0.01'))
+        if fraction in (1, '1'):
+            return situation_max.quantize(Decimal('0.01'))
+    
     try:
-        return Decimal(str(fraction)) * unit
+        return (Decimal(str(fraction)) * situation_max).quantize(Decimal('0.01'))
     except Exception:
         return Decimal('0')
 
@@ -1429,6 +1984,7 @@ def teacher_attempt_grade_view(request, attempt_id):
     try:
         attempt = ExamAttempt.objects.select_related('exam').prefetch_related('answers').get(pk=attempt_id, exam__created_by=request.user)
     except ExamAttempt.DoesNotExist:
+        logger.warning("teacher_attempt_grade attempt_id=%s user_id=%s not_found", attempt_id, getattr(request.user, 'id', None))
         return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
 
     exam = attempt.exam
@@ -1439,76 +1995,143 @@ def teacher_attempt_grade_view(request, attempt_id):
     publish = request.data.get('publish', False)
     notes = request.data.get('notes', '')
 
-    total_manual = Decimal('0')
-    with transaction.atomic():
-        for answer_id_str, score_value in manual_scores.items():
-            try:
-                answer_id = int(answer_id_str)
-                score = Decimal(str(score_value))
-                answer = ExamAnswer.objects.get(pk=answer_id, attempt=attempt)
-                answer.manual_score = score
-                answer.save(update_fields=['manual_score'])
-                total_manual += score
-            except (ValueError, ExamAnswer.DoesNotExist):
-                continue
+    try:
+        total_manual = Decimal('0')
+        old_total_score = (attempt.auto_score or Decimal('0')) + (attempt.manual_score or Decimal('0'))
+        with transaction.atomic():
+            for answer_id_str, score_value in manual_scores.items():
+                try:
+                    answer_id = int(answer_id_str)
+                    score = Decimal(str(score_value))
+                    answer = ExamAnswer.objects.get(pk=answer_id, attempt=attempt)
+                    old_answer_score = answer.manual_score or Decimal('0')
+                    answer.manual_score = score
+                    answer.save(update_fields=['manual_score'])
+                    total_manual += score
+                    # Log audit if score changed
+                    if old_answer_score != score:
+                        GradingAuditLog.objects.create(
+                            attempt=attempt,
+                            teacher=request.user,
+                            answer=answer,
+                            old_score=old_answer_score,
+                            new_score=score,
+                        )
+                except (ValueError, ExamAnswer.DoesNotExist):
+                    continue
 
-        # per_situation_scores: [{index: 1, fraction: 0|"2/3"|1|"4/3"|2}, ...] - index 1-based situation order
-        situation_answers = list(attempt.answers.filter(requires_manual_check=True).order_by('question_number'))
-        for item in per_situation_scores:
-            if not isinstance(item, dict):
-                continue
-            idx = item.get('index') or item.get('situationIndex')
-            fraction = item.get('fraction') or item.get('score')
-            if idx is None:
-                continue
-            try:
-                idx = int(idx)
-            except (TypeError, ValueError):
-                continue
-            if idx < 1 or idx > len(situation_answers):
-                continue
-            pts = _situation_fraction_to_points(fraction, is_quiz)
-            ans = situation_answers[idx - 1]
-            ans.manual_score = pts
-            ans.save(update_fields=['manual_score'])
-            total_manual += pts
+            # per_situation_scores: [{index: 1, fraction: 0|2/3|1|4/3|2 (Option Set 2)}, ...] - index 1-based
+            situation_max = _situation_max_per_question(is_quiz)
+            situation_answers = list(attempt.answers.filter(requires_manual_check=True).order_by('question_number'))
+            for item in per_situation_scores:
+                if not isinstance(item, dict):
+                    continue
+                idx = item.get('index') or item.get('situationIndex')
+                fraction = item.get('fraction') or item.get('score')
+                if idx is None:
+                    continue
+                try:
+                    idx = int(idx)
+                except (TypeError, ValueError):
+                    continue
+                if idx < 1 or idx > len(situation_answers):
+                    continue
+                # Use SET2: [0, 2/3, 1, 4/3, 2]
+                pts = _situation_fraction_to_points(fraction, is_quiz, max_situation_points=situation_max, use_set2=True)
+                ans = situation_answers[idx - 1]
+                old_answer_score = ans.manual_score or Decimal('0')
+                ans.manual_score = pts
+                ans.save(update_fields=['manual_score'])
+                total_manual += pts
+                # Log audit if score changed
+                if old_answer_score != pts:
+                    GradingAuditLog.objects.create(
+                        attempt=attempt,
+                        teacher=request.user,
+                        answer=ans,
+                        old_score=old_answer_score,
+                        new_score=pts,
+                    )
 
-        auto_total = sum(float(a.auto_score or 0) for a in attempt.answers.filter(requires_manual_check=False))
-        attempt.manual_score = total_manual
-        attempt.auto_score = Decimal(str(auto_total))
-        attempt.is_checked = True
-        attempt.save(update_fields=['manual_score', 'auto_score', 'is_checked'])
+            auto_total = sum(float(a.auto_score or 0) for a in attempt.answers.filter(requires_manual_check=False))
+            attempt.manual_score = total_manual
+            attempt.auto_score = Decimal(str(auto_total))
+            attempt.is_checked = True
+            new_total_score = attempt.auto_score + attempt.manual_score
+            # Validate: total_score must not exceed max_score
+            if new_total_score > Decimal(str(max_score)):
+                new_total_score = Decimal(str(max_score))
+            attempt.total_score = new_total_score
+            attempt.save(update_fields=['manual_score', 'auto_score', 'total_score', 'is_checked'])
+            # Log total score change if different
+            if old_total_score != new_total_score:
+                GradingAuditLog.objects.create(
+                    attempt=attempt,
+                    teacher=request.user,
+                    answer=None,
+                    old_total_score=old_total_score,
+                    new_total_score=new_total_score,
+                )
 
-        if publish:
-            attempt.exam.is_result_published = True
-            attempt.exam.save(update_fields=['is_result_published'])
+            if publish:
+                # Lock scores permanently: set is_result_published on ATTEMPT level
+                attempt.is_result_published = True
+                attempt.save(update_fields=['is_result_published'])
+                # Also set on exam level
+                attempt.exam.is_result_published = True
+                attempt.exam.save(update_fields=['is_result_published'])
+                # Auto-finish exam if all attempts are graded and published
+                _auto_finish_exam_if_all_graded(attempt.exam)
 
-    final = float(total_manual) + sum(float(a.auto_score or 0) for a in attempt.answers.filter(requires_manual_check=False))
-    if final > max_score:
-        final = max_score
-    return Response({
-        'attemptId': attempt.id,
-        'manualScore': float(attempt.manual_score or 0),
-        'autoScore': float(attempt.auto_score or 0),
-        'finalScore': final,
-        'isPublished': attempt.exam.is_result_published,
-    })
+        final = float(attempt.total_score or 0)
+        if final > max_score:
+            final = max_score
+        return Response({
+            'attemptId': attempt.id,
+            'manualScore': float(attempt.manual_score or 0),
+            'autoScore': float(attempt.auto_score or 0),
+            'totalScore': final,
+            'finalScore': final,
+            'isPublished': attempt.is_result_published,
+        })
+    except Exception as e:
+        logger.exception(
+            "teacher_attempt_grade error attempt_id=%s exam_id=%s user_id=%s: %s",
+            attempt_id, attempt.exam_id, getattr(request.user, 'id', None), e
+        )
+        return Response({'detail': 'Could not grade'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, IsTeacher])
 def teacher_attempt_publish_view(request, attempt_id):
-    """Publish/unpublish attempt result."""
+    """Publish/unpublish attempt result. Locks scores permanently on publish."""
     try:
         attempt = ExamAttempt.objects.select_related('exam').get(pk=attempt_id, exam__created_by=request.user)
     except ExamAttempt.DoesNotExist:
         return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
     
     publish = request.data.get('publish', True)
-    attempt.exam.is_result_published = publish
-    attempt.exam.save(update_fields=['is_result_published'])
     
-    return Response({'isPublished': publish})
+    with transaction.atomic():
+        # Set per-attempt publish flag (locks scores)
+        attempt.is_result_published = publish
+        attempt.save(update_fields=['is_result_published'])
+        # Also set on exam level
+        attempt.exam.is_result_published = publish
+        attempt.exam.save(update_fields=['is_result_published'])
+        if publish:
+            _auto_finish_exam_if_all_graded(attempt.exam)
+    
+    return Response({
+        'isPublished': publish,
+        'totalScore': float(attempt.total_score or 0),
+        'autoScore': float(attempt.auto_score or 0),
+        'manualScore': float(attempt.manual_score or 0),
+    })
+
+
+# Removed duplicate teacher_attempt_reopen_view - the canonical one is defined later (line ~2141)
 
 
 @api_view(['POST'])
@@ -1622,7 +2245,16 @@ def teacher_pdfs_view(request):
                 pass
         if tag:
             qs = qs.filter(tags__contains=[tag])
-        serializer = TeacherPDFSerializer(qs, many=True, context={'request': request})
+        # Filter out PDFs where file doesn't exist on disk
+        valid_pdfs = []
+        for pdf in qs:
+            try:
+                if pdf.file and pdf.file.storage.exists(pdf.file.name):
+                    valid_pdfs.append(pdf)
+            except Exception:
+                # Skip PDFs with storage errors
+                continue
+        serializer = TeacherPDFSerializer(valid_pdfs, many=True, context={'request': request})
         return Response(serializer.data)
     if request.method == 'POST':
         data = request.data.copy()

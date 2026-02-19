@@ -87,6 +87,7 @@ urlpatterns = [
     # API endpoints
     path('api/auth/', include('accounts.urls')),
     path('api/users/', include('accounts.urls_users')),
+    path('api/teacher/notifications/', include('notifications.urls')),  # Must come before general teacher URLs
     path('api/teacher/', include('groups.urls.teacher')),
     path('api/student/', include('students.urls.student')),
     path('api/parent/', include('students.urls.parent')),

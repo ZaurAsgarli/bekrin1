@@ -4,7 +4,13 @@ List, filter, export, and reveal (with audit) imported credentials.
 """
 import csv
 import io
+from django.db import models
 from django.db.models import Q
+from django.contrib.auth import get_user_model
+
+from core.utils import belongs_to_user_organization
+
+User = get_user_model()
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import status
@@ -115,13 +121,89 @@ def credentials_reveal_view(request, pk):
     except ImportedCredentialRecord.DoesNotExist:
         return Response({"detail": "Record not found"}, status=status.HTTP_404_NOT_FOUND)
 
-    if rec.student.organization_id != (org.id if org else None):
+    if not belongs_to_user_organization(rec.student, request.user, "organization"):
         return Response({"detail": "Access denied"}, status=status.HTTP_403_FORBIDDEN)
 
     rec.password_viewed_at = timezone.now()
     rec.save(update_fields=["password_viewed_at"])
 
     return Response(_record_to_dict(rec, include_password=True))
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsTeacher])
+def user_reveal_password_view(request, user_id):
+    """
+    POST /api/teacher/users/<user_id>/reveal-password
+    One-time reveal. Returns password if not yet revealed. Sets password_viewed_at.
+    """
+    try:
+        user = User.objects.get(pk=user_id)
+    except User.DoesNotExist:
+        return Response({"detail": "İstifadəçi tapılmadı"}, status=status.HTTP_404_NOT_FOUND)
+    org = request.user.organization
+    if not belongs_to_user_organization(user, request.user, "organization"):
+        return Response({"detail": "İcazə yoxdur"}, status=status.HTTP_403_FORBIDDEN)
+    rec = ImportedCredentialRecord.objects.filter(
+        models.Q(student=user) | models.Q(parent=user)
+    ).first()
+    if not rec:
+        return Response({"detail": "Parol qeydiyyatı tapılmadı. İmport və ya əl ilə yaradılan hesablar üçün mövcuddur."}, status=status.HTTP_404_NOT_FOUND)
+    if not belongs_to_user_organization(rec.student, request.user, "organization"):
+        return Response({"detail": "İcazə yoxdur"}, status=status.HTTP_403_FORBIDDEN)
+    if rec.password_viewed_at:
+        return Response({
+            "detail": "Parol artıq göstərilib. Yeni parol yaratmaq üçün 'Reset + Show once' istifadə edin.",
+            "revealed": False,
+        }, status=status.HTTP_400_BAD_REQUEST)
+    rec.password_viewed_at = timezone.now()
+    rec.save(update_fields=["password_viewed_at"])
+    from students.credential_crypto import decrypt_credentials
+    pw = decrypt_credentials(rec.initial_password_encrypted)
+    password = pw.get("student_password") or pw.get("parent_password") or ""
+    return Response({
+        "password": password,
+        "revealed": True,
+        "message": "Parol yalnız bir dəfə göstərilir.",
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, IsTeacher])
+def user_reset_password_view(request, user_id):
+    """
+    POST /api/teacher/users/<user_id>/reset-password
+    Reset password, return new password once. Updates user and ImportedCredentialRecord.
+    """
+    from students.credentials import generate_simple_password
+    from students.credential_crypto import encrypt_credentials
+
+    try:
+        user = User.objects.get(pk=user_id)
+    except User.DoesNotExist:
+        return Response({"detail": "İstifadəçi tapılmadı"}, status=status.HTTP_404_NOT_FOUND)
+    org = request.user.organization
+    if not belongs_to_user_organization(user, request.user, "organization"):
+        return Response({"detail": "İcazə yoxdur"}, status=status.HTTP_403_FORBIDDEN)
+    rec = ImportedCredentialRecord.objects.filter(
+        models.Q(student=user) | models.Q(parent=user)
+    ).select_related("student", "parent").first()
+    new_password = generate_simple_password()
+    user.set_password(new_password)
+    user.save(update_fields=["password"])
+    if rec:
+        encrypted = encrypt_credentials(new_password, new_password)
+        rec.initial_password_encrypted = encrypted
+        rec.password_viewed_at = None
+        rec.save(update_fields=["initial_password_encrypted", "password_viewed_at"])
+        other_user = rec.parent if user == rec.student else rec.student
+        if other_user:
+            other_user.set_password(new_password)
+            other_user.save(update_fields=["password"])
+    return Response({
+        "password": new_password,
+        "message": "Yeni parol yaradıldı. Yalnız bir dəfə göstərilir.",
+    })
 
 
 @api_view(["GET"])

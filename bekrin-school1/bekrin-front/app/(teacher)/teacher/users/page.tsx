@@ -9,7 +9,8 @@ import { Modal } from "@/components/Modal";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Pencil, Trash2, RotateCcw, UserPlus, Search, ChevronLeft, ChevronRight } from "lucide-react";
+import { teacherApi } from "@/lib/teacher";
+import { Pencil, Trash2, RotateCcw, UserPlus, Search, ChevronLeft, ChevronRight, Eye, KeyRound } from "lucide-react";
 
 const editSchema = z.object({
   fullName: z.string().min(1, "Ad Soyad tələb olunur"),
@@ -62,6 +63,11 @@ export default function UsersPage() {
   const [addingUser, setAddingUser] = useState(false);
   const [deletingUser, setDeletingUser] = useState<User | null>(null);
   const [restoringUser, setRestoringUser] = useState<User | null>(null);
+  const [passwordModal, setPasswordModal] = useState<{
+    user: User;
+    password: string;
+    type: "reveal" | "reset";
+  } | null>(null);
 
   const queryParams = {
     page,
@@ -133,6 +139,39 @@ export default function UsersPage() {
     },
     onError: (err: { message?: string }) => {
       toast.error(err?.message || "Bərpa edərkən xəta baş verdi");
+    },
+  });
+
+  const revealPasswordMutation = useMutation({
+    mutationFn: async ({ userId, user }: { userId: string; user: User }) => {
+      const r = await teacherApi.userRevealPassword(userId);
+      return { ...r, user };
+    },
+    onSuccess: (data) => {
+      if (data.password) {
+        setPasswordModal({ user: data.user, password: data.password, type: "reveal" });
+      } else if (!data.revealed && data.message) {
+        toast.error(data.message);
+      }
+    },
+    onError: (err: { message?: string }) => {
+      toast.error(err?.message || "Parol göstərilmədi");
+    },
+  });
+
+  const resetPasswordMutation = useMutation({
+    mutationFn: async ({ userId, user }: { userId: string; user: User }) => {
+      const r = await teacherApi.userResetPassword(userId);
+      return { ...r, user };
+    },
+    onSuccess: (data) => {
+      if (data.password) {
+        setPasswordModal({ user: data.user, password: data.password, type: "reset" });
+        toast.success("Yeni parol yaradıldı");
+      }
+    },
+    onError: (err: { message?: string }) => {
+      toast.error(err?.message || "Parol yenilənmədi");
     },
   });
 
@@ -277,7 +316,31 @@ export default function UsersPage() {
                     </span>
                   </td>
                   <td className="py-3 px-4 text-sm">
-                    <div className="flex items-center justify-end gap-2">
+                    <div className="flex items-center justify-end gap-1">
+                      {(user.role === "student" || user.role === "parent") && (
+                        <>
+                          <button
+                            onClick={() =>
+                              revealPasswordMutation.mutate({ userId: user.id, user })
+                            }
+                            disabled={revealPasswordMutation.isPending}
+                            className="p-2 hover:bg-slate-100 rounded-lg text-slate-600 transition-colors"
+                            title="Parolu göstər (1 dəfə)"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() =>
+                              resetPasswordMutation.mutate({ userId: user.id, user })
+                            }
+                            disabled={resetPasswordMutation.isPending}
+                            className="p-2 hover:bg-slate-100 rounded-lg text-slate-600 transition-colors"
+                            title="Reset + göstər (1 dəfə)"
+                          >
+                            <KeyRound className="w-4 h-4" />
+                          </button>
+                        </>
+                      )}
                       <button
                         onClick={() => handleEdit(user)}
                         className="p-2 hover:bg-blue-50 rounded-lg text-blue-600 transition-colors"
@@ -508,6 +571,39 @@ export default function UsersPage() {
             Ləğv et
           </button>
         </div>
+      </Modal>
+
+      {/* Password Modal (one-time reveal) */}
+      <Modal
+        isOpen={!!passwordModal}
+        onClose={() => setPasswordModal(null)}
+        title={
+          passwordModal?.type === "reset"
+            ? "Yeni parol yaradıldı"
+            : "Parol (yalnız bir dəfə göstərilir)"
+        }
+        size="sm"
+      >
+        {passwordModal && (
+          <div className="space-y-4">
+            <p className="text-slate-600">
+              <span className="font-medium">{passwordModal.user.fullName}</span>
+              <span className="text-slate-500"> ({passwordModal.user.email})</span>
+            </p>
+            <div className="bg-slate-100 rounded-lg p-4 font-mono text-lg tracking-wider">
+              {passwordModal.password}
+            </div>
+            <p className="text-xs text-amber-600">
+              Bu parolu saxlayın. Yenidən göstərilməyəcək.
+            </p>
+            <button
+              onClick={() => setPasswordModal(null)}
+              className="btn-primary w-full"
+            >
+              Bağla
+            </button>
+          </div>
+        )}
       </Modal>
     </div>
   );

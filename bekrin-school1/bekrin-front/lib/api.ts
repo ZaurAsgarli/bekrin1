@@ -37,12 +37,27 @@ async function request<T>(
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const res = await fetch(url, {
-    method: options.method ?? "GET",
-    headers,
-    credentials: "include",
-    body: options.body,
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: options.method ?? "GET",
+      headers,
+      credentials: "include",
+      body: options.body,
+    });
+  } catch (error: any) {
+    // Network error (backend server işləmir, CORS problemi, və s.)
+    const errorMessage = error?.message || "Naməlum xəta";
+    if (errorMessage.includes("Failed to fetch") || errorMessage.includes("NetworkError") || errorMessage.includes("Network request failed")) {
+      throw new Error(
+        `Backend server ilə əlaqə qurula bilmədi. Zəhmət olmasa yoxlayın:\n` +
+        `1. Backend server işləyir? (http://localhost:8000)\n` +
+        `2. API URL düzgündür? (${url})\n` +
+        `3. CORS konfiqurasiyası düzgündür?`
+      );
+    }
+    throw error;
+  }
 
   if (res.status === 401 && typeof window !== "undefined") {
     const path = window.location.pathname || "";
@@ -67,13 +82,41 @@ async function request<T>(
 
   if (!res.ok) {
     let message = "Naməlum xəta baş verdi";
+    let errorData: any = null;
     try {
-      const data = await res.json();
-      message = (data?.error ?? data?.detail ?? data?.message ?? message) as string;
-    } catch {
-      // ignore
+      const text = await res.text();
+      if (text) {
+        try {
+          errorData = JSON.parse(text);
+        } catch {
+          errorData = text;
+        }
+      }
+      // Handle Django REST Framework validation errors (dict of field errors)
+      if (errorData && typeof errorData === 'object' && !errorData.detail && !errorData.error && !errorData.message) {
+        const fieldErrors: string[] = [];
+        for (const [field, errors] of Object.entries(errorData)) {
+          if (Array.isArray(errors)) {
+            fieldErrors.push(`${field}: ${errors.join(', ')}`);
+          } else if (typeof errors === 'string') {
+            fieldErrors.push(`${field}: ${errors}`);
+          } else {
+            fieldErrors.push(`${field}: ${JSON.stringify(errors)}`);
+          }
+        }
+        message = fieldErrors.length > 0 ? fieldErrors.join('; ') : message;
+      } else {
+        message = (errorData?.error ?? errorData?.detail ?? errorData?.message ?? (typeof errorData === 'string' ? errorData : message)) as string;
+      }
+    } catch (e) {
+      console.error("Error parsing response:", e);
     }
-    const error: ApiError = { status: res.status, message };
+    const error: ApiError & { response?: { data: any }; data?: any } = { 
+      status: res.status, 
+      message, 
+      response: { data: errorData },
+      data: errorData
+    };
     throw error;
   }
 

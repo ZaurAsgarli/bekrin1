@@ -7,6 +7,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { teacherNav, studentNav, parentNav } from "@/lib/navigation";
 import { BackButton } from "@/components/BackButton";
+import { NotificationsBell } from "@/components/NotificationsBell";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { data: user, isLoading } = useMe();
@@ -116,6 +117,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   <span>{user.fullName}</span>
                 </div>
               )}
+              {role === "teacher" && <NotificationsBell />}
               <button
                 onClick={() => logout.mutate()}
                 className="inline-flex items-center gap-2 rounded-lg border border-red-300 px-3 py-1.5 text-sm font-semibold text-red-700 hover:bg-red-50 transition-colors"

@@ -39,6 +39,26 @@ def generate_password(length: int = 12) -> str:
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
+def generate_simple_password(existing: set = None) -> str:
+    """
+    Generate an easy-to-type, unique password: 2 letters + 4 digits + 1 letter.
+    Format: KA4821M (A-Z excl I,O; digits 2-9).
+    Collision-safe for 10k+ users. existing=set of already-used passwords.
+    """
+    letters = "ABCDEFGHJKLMPQRSTUVWXYZ"
+    digits = "23456789"
+    existing = existing or set()
+    for _ in range(100):
+        p = (
+            "".join(secrets.choice(letters) for _ in range(2))
+            + "".join(secrets.choice(digits) for _ in range(4))
+            + secrets.choice(letters)
+        )
+        if p not in existing:
+            return p
+    return "".join(secrets.choice(letters + digits) for _ in range(7))
+
+
 def generate_parent_credentials(full_name: str) -> Tuple[str, str]:
     """Generate parent email and password only."""
     domain = _get_email_domain()

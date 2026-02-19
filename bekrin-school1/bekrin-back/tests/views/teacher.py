@@ -37,11 +37,10 @@ def teacher_tests_list_view(request):
 @permission_classes([IsAuthenticated, IsTeacher])
 def teacher_test_result_create_view(request):
     """
-    POST /api/teacher/test-results - create TestResult (manual grade entry)
-    Body: { studentProfileId, groupId?, testName, maxScore, score, date }
+    POST /api/teacher/test-results - DISABLED
+    Manual grade entry removed. All grades must come from exam grading process.
     """
-    serializer = TestResultCreateSerializer(data=request.data)
-    if serializer.is_valid():
-        instance = serializer.save()
-        return Response(TestResultSerializer(instance).data, status=status.HTTP_201_CREATED)
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    return Response(
+        {'detail': 'Qiymət əlavə etmə deaktiv edilib. Bütün qiymətlər imtahan yoxlama prosesindən gəlməlidir.'},
+        status=status.HTTP_403_FORBIDDEN
+    )

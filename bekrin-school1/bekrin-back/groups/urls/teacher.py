@@ -10,6 +10,7 @@ from ..views.teacher import (
     teacher_group_students_view,
     teacher_move_student_view,
     teacher_payments_view,
+    teacher_notifications_low_balance_view,
 )
 from ..views.archive import (
     archive_payments_view,
@@ -25,6 +26,13 @@ from attendance.views.teacher import (
     attendance_save_view,
     attendance_group_monthly_view,
     attendance_student_daily_view,
+    attendance_grid_new_view,
+    attendance_bulk_upsert_view,
+    attendance_bulk_delete_view,
+    attendance_monthly_new_view,
+    attendance_mark_all_present_view,
+    lesson_finalize_view,
+    lesson_unlock_view,
 )
 from coding.views.archive import (
     archive_coding_topics_view,
@@ -60,6 +68,9 @@ from tests.views.archive import (
     hard_delete_question_view,
     hard_delete_exam_view,
     hard_delete_pdf_view,
+    bulk_delete_exams_view,
+    bulk_delete_questions_view,
+    bulk_delete_pdfs_view,
 )
 from tests.views.exams import (
     teacher_question_topics_view,
@@ -77,6 +88,7 @@ from tests.views.exams import (
     teacher_exam_runs_list_view,
     teacher_run_attempts_view,
     teacher_run_reset_student_view,
+    teacher_run_update_view,
     teacher_exam_attempts_view,
     teacher_exam_attempts_cleanup_view,
     teacher_exam_reset_student_view,
@@ -93,10 +105,16 @@ from students.views.bulk_import import (
     bulk_import_preview_view,
     bulk_import_confirm_view,
 )
+from students.views.bulk_import_users import (
+    bulk_import_users_view,
+    bulk_import_template_csv_view,
+)
 from students.views.credentials import (
     credentials_list_view,
     credentials_reveal_view,
     credentials_export_view,
+    user_reveal_password_view,
+    user_reset_password_view,
 )
 
 app_name = 'teacher'
@@ -113,15 +131,23 @@ urlpatterns = [
     path('groups/<int:group_id>/students', teacher_group_students_view, name='group-students-add'),
     path('groups/<int:group_id>/students/<int:student_id>', teacher_group_students_view, name='group-students-remove'),
     path('groups/move-student', teacher_move_student_view, name='move-student'),
+    path('notifications/low-balance', teacher_notifications_low_balance_view, name='notifications-low-balance'),
     path('payments', teacher_payments_view, name='payments-list'),
     path('payments/<int:pk>/restore', restore_payment_view, name='restore-payment'),
     path('payments/<int:pk>', teacher_payments_view, name='payments-detail'),
     path('attendance', teacher_attendance_grid_view, name='attendance-grid'),
+    path('attendance/grid', attendance_grid_new_view, name='attendance-grid-new'),
+    path('attendance/bulk-upsert', attendance_bulk_upsert_view, name='attendance-bulk-upsert'),
+    path('attendance/bulk-delete', attendance_bulk_delete_view, name='attendance-bulk-delete'),
+    path('attendance/monthly', attendance_monthly_new_view, name='attendance-monthly-new'),
+    path('attendance/mark-all-present', attendance_mark_all_present_view, name='attendance-mark-all-present'),
     path('attendance/update', teacher_attendance_update_view, name='attendance-update'),
     path('attendance/group/<int:group_id>/daily', attendance_group_daily_view, name='attendance-daily'),
     path('attendance/save', attendance_save_view, name='attendance-save'),
     path('attendance/group/<int:group_id>/monthly', attendance_group_monthly_view, name='attendance-monthly'),
     path('attendance/group/<int:group_id>/student/<int:student_id>/daily', attendance_student_daily_view, name='attendance-student-daily'),
+    path('lessons/finalize', lesson_finalize_view, name='lesson-finalize'),
+    path('lessons/unlock', lesson_unlock_view, name='lesson-unlock'),
     path('archive/coding-topics', archive_coding_topics_view, name='archive-coding-topics'),
     path('archive/coding-tasks', archive_coding_tasks_view, name='archive-coding-tasks'),
     path('coding/topics', teacher_coding_topics_view, name='coding-topics'),
@@ -168,6 +194,7 @@ urlpatterns = [
     path('exams/<int:exam_id>/runs', teacher_exam_runs_list_view, name='exam-runs'),
     path('runs/<int:run_id>/attempts', teacher_run_attempts_view, name='run-attempts'),
     path('runs/<int:run_id>/reset-student', teacher_run_reset_student_view, name='run-reset-student'),
+    path('runs/<int:run_id>', teacher_run_update_view, name='run-update'),
     path('exams/<int:exam_id>/attempts', teacher_exam_attempts_view, name='exam-attempts'),
     path('exams/<int:exam_id>/attempts/cleanup', teacher_exam_attempts_cleanup_view, name='exam-attempts-cleanup'),
     path('exams/<int:exam_id>/reset-student', teacher_exam_reset_student_view, name='exam-reset-student'),
@@ -180,9 +207,16 @@ urlpatterns = [
     path('pdfs/<int:pk>', teacher_pdf_detail_view, name='pdf-detail'),
     path('pdfs/<int:pk>/restore', restore_pdf_view, name='pdf-restore'),
     path('pdfs/<int:pk>/hard-delete', hard_delete_pdf_view, name='pdf-hard-delete'),
+    path('archive/exams/bulk-delete', bulk_delete_exams_view, name='bulk-delete-exams'),
+    path('archive/questions/bulk-delete', bulk_delete_questions_view, name='bulk-delete-questions'),
+    path('archive/pdfs/bulk-delete', bulk_delete_pdfs_view, name='bulk-delete-pdfs'),
     path('bulk-import', bulk_import_students_view, name='bulk-import'),
     path('bulk-import/preview', bulk_import_preview_view, name='bulk-import-preview'),
     path('bulk-import/confirm', bulk_import_confirm_view, name='bulk-import-confirm'),
+    path('bulk-import/users', bulk_import_users_view, name='bulk-import-users'),
+    path('bulk-import/template-csv', bulk_import_template_csv_view, name='bulk-import-template-csv'),
+    path('users/<int:user_id>/reveal-password', user_reveal_password_view, name='user-reveal-password'),
+    path('users/<int:user_id>/reset-password', user_reset_password_view, name='user-reset-password'),
     path('credentials', credentials_list_view, name='credentials-list'),
     path('credentials/export.csv', credentials_export_view, name='credentials-export'),
     path('credentials/<int:pk>/reveal', credentials_reveal_view, name='credentials-reveal'),

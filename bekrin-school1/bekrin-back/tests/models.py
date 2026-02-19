@@ -484,6 +484,26 @@ class ExamAttempt(models.Model):
     is_checked = models.BooleanField(default=False)
     is_result_published = models.BooleanField(default=False, db_index=True)
     is_archived = models.BooleanField(default=False, db_index=True, help_text='Archived by teacher cleanup')
+    attempt_blueprint = models.JSONField(
+        null=True,
+        blank=True,
+        help_text='Frozen question/option order and correctOptionId per question for this attempt',
+    )
+    question_order = models.JSONField(
+        null=True,
+        blank=True,
+        help_text='Order of questions as seen by student (for grading accuracy)',
+    )
+    option_order = models.JSONField(
+        null=True,
+        blank=True,
+        help_text='Order of options per question as seen by student (for grading accuracy)',
+    )
+    is_visible_to_student = models.BooleanField(
+        default=True,
+        db_index=True,
+        help_text='Whether student can see/restart this attempt (locked after submit)',
+    )
 
     class Meta:
         db_table = 'exam_attempts'
@@ -688,3 +708,48 @@ class TeacherPDF(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class GradingAuditLog(models.Model):
+    """Audit log for teacher score changes during grading."""
+    attempt = models.ForeignKey(
+        ExamAttempt,
+        on_delete=models.CASCADE,
+        related_name='grading_audit_logs',
+        db_index=True,
+    )
+    teacher = models.ForeignKey(
+        'accounts.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='grading_audit_logs',
+        limit_choices_to={'role': 'teacher'},
+    )
+    answer = models.ForeignKey(
+        ExamAnswer,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='grading_audit_logs',
+        help_text='Specific answer that was changed (null if total score changed)',
+    )
+    old_score = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    new_score = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    old_total_score = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text='Total attempt score before change')
+    new_total_score = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text='Total attempt score after change')
+    changed_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    notes = models.TextField(blank=True, null=True, help_text='Optional notes about the change')
+
+    class Meta:
+        db_table = 'grading_audit_logs'
+        verbose_name = 'Grading Audit Log'
+        verbose_name_plural = 'Grading Audit Logs'
+        ordering = ['-changed_at']
+        indexes = [
+            models.Index(fields=['attempt']),
+            models.Index(fields=['teacher']),
+            models.Index(fields=['changed_at']),
+        ]
+
+    def __str__(self):
+        return f"Attempt {self.attempt_id} - {self.old_score} → {self.new_score} by {self.teacher_id}"

@@ -37,6 +37,7 @@ export function CanvasPad({
   const redoStack = useRef<string[]>([]);
   const lastSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const storageKey = `canvas_${attemptId}_${questionId ?? 'default'}`;
 
   const pushUndo = useCallback(() => {
     const canvas = canvasRef.current;
@@ -96,7 +97,19 @@ export function CanvasPad({
 
   useEffect(() => {
     initCanvas();
-  }, [initCanvas]);
+    // Load from localStorage on mount
+    if (typeof window !== "undefined" && !readOnly) {
+      const saved = localStorage.getItem(storageKey);
+      if (saved && !initialImageUrl) {
+        try {
+          drawImageToCanvas(saved);
+          undoStack.current.push(saved);
+        } catch (e) {
+          console.warn("Failed to load canvas from localStorage", e);
+        }
+      }
+    }
+  }, [initCanvas, storageKey, readOnly, initialImageUrl, drawImageToCanvas]);
 
   useEffect(() => {
     if (initialImageUrl && canvasRef.current && undoStack.current.length === 0) {
@@ -141,22 +154,40 @@ export function CanvasPad({
     ctx.stroke();
   };
 
+  const saveToStorage = useCallback((data: string) => {
+    if (typeof window !== "undefined" && !readOnly) {
+      try {
+        localStorage.setItem(storageKey, data);
+      } catch (e) {
+        console.warn("Failed to save canvas to localStorage", e);
+      }
+    }
+  }, [storageKey, readOnly]);
+
   const handlePointerUp = (e: React.PointerEvent) => {
     if (!isDrawing) return;
     setIsDrawing(false);
     if (onSave && canvasRef.current) {
+      const data = canvasRef.current.toDataURL("image/png", 0.92);
+      // Save to localStorage immediately
+      saveToStorage(data);
+      
+      // Debounced server save (reduced from 1200ms to 2000ms for better debouncing)
       if (lastSaveRef.current) clearTimeout(lastSaveRef.current);
       lastSaveRef.current = setTimeout(() => {
-        const data = canvasRef.current!.toDataURL("image/png", 0.92);
         setSaveStatus("saving");
         onSave(data)
           .then(() => {
             setSaveStatus("saved");
             setTimeout(() => setSaveStatus("idle"), 2000);
+            // Clear localStorage after successful save
+            if (typeof window !== "undefined") {
+              localStorage.removeItem(storageKey);
+            }
           })
           .catch(() => setSaveStatus("error"));
         lastSaveRef.current = null;
-      }, 1200);
+      }, 2000);
     }
   };
 
@@ -204,9 +235,31 @@ export function CanvasPad({
       .then(() => {
         setSaveStatus("saved");
         setTimeout(() => setSaveStatus("idle"), 2000);
+        // Clear localStorage after successful save
+        if (typeof window !== "undefined") {
+          localStorage.removeItem(storageKey);
+        }
       })
       .catch(() => setSaveStatus("error"));
   };
+
+  // Expose final save function for submit handler
+  useEffect(() => {
+    if (canvasRef.current && onSave && !readOnly) {
+      // Store final save function on canvas element for external access
+      (canvasRef.current as any).finalSave = async () => {
+        if (lastSaveRef.current) {
+          clearTimeout(lastSaveRef.current);
+          lastSaveRef.current = null;
+        }
+        const data = canvasRef.current!.toDataURL("image/png", 0.92);
+        await onSave(data);
+        if (typeof window !== "undefined") {
+          localStorage.removeItem(storageKey);
+        }
+      };
+    }
+  }, [onSave, readOnly, storageKey]);
 
   const canvasEl = (
     <div
@@ -216,6 +269,7 @@ export function CanvasPad({
     >
       <canvas
         ref={canvasRef}
+        data-canvas-pad="true"
         className="block w-full cursor-crosshair touch-none select-none"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}

@@ -55,6 +55,7 @@ class Payment(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='paid')
     note = models.TextField(blank=True, null=True)
     receipt_no = models.CharField(max_length=50, unique=True, blank=True, null=True)
+    sequence_number = models.IntegerField(null=True, blank=True, db_index=True, help_text='Sequential payment number (globally ordered by date)')
     created_by = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,

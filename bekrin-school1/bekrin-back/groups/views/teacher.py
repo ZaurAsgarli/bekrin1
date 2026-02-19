@@ -6,8 +6,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.conf import settings
+import traceback
 from django.db import transaction, models
-from django.db.models import Q, Count
+from django.db.models import Q, Count, OuterRef, Subquery, Max
 from django.utils import timezone
 from datetime import date
 from accounts.permissions import IsTeacher
@@ -370,11 +371,54 @@ def teacher_payments_view(request, pk=None):
         return Response(serializer.data)
     
     if request.method == 'POST':
+        import logging
+        logger = logging.getLogger(__name__)
+        
         # Pass frontend format directly; PaymentCreateSerializer expects studentId, groupId
         serializer = PaymentCreateSerializer(data=request.data)
         if serializer.is_valid():
-            payment = serializer.save(created_by=request.user, organization=request.user.organization)
-            return Response(TeacherPaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
+            try:
+                # Get old balance before creating payment (for logging)
+                student_id = request.data.get('studentId')
+                old_balance = None
+                if student_id:
+                    try:
+                        from students.models import StudentProfile
+                        student_before = StudentProfile.objects.get(id=student_id)
+                        old_balance = float(student_before.balance) if student_before.balance else 0.0
+                    except StudentProfile.DoesNotExist:
+                        pass
+                
+                payment = serializer.save(created_by=request.user, organization=request.user.organization)
+                
+                # Refresh payment to get updated student balance
+                payment.refresh_from_db()
+                student = payment.student_profile
+                student.refresh_from_db()
+                
+                # Return response with updated balance info
+                from students.utils import get_teacher_display_balance
+                response_data = TeacherPaymentSerializer(payment).data
+                response_data['success'] = True
+                response_data['message'] = 'Ödəniş əlavə olundu'
+                response_data['studentId'] = str(student.id)
+                response_data['studentName'] = student.user.full_name
+                response_data['newRealBalance'] = float(student.balance)
+                response_data['newDisplayBalanceTeacher'] = get_teacher_display_balance(student.balance)
+                
+                if old_balance is not None:
+                    logger.info(f"[PAYMENT] Payment created successfully: payment_id={payment.id}, student_id={student.id}, old_balance={old_balance}, new_balance={float(student.balance)}")
+                else:
+                    logger.info(f"[PAYMENT] Payment created successfully: payment_id={payment.id}, student_id={student.id}, new_balance={float(student.balance)}")
+                
+                return Response(response_data, status=status.HTTP_201_CREATED)
+            except Exception as e:
+                logger.error(f"[PAYMENT] Error creating payment: {e}", exc_info=True)
+                error_detail = str(e)
+                return Response(
+                    {'detail': f'Ödəniş yaradılarkən xəta baş verdi: {error_detail}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     if request.method == 'DELETE':
@@ -387,3 +431,72 @@ def teacher_payments_view(request, pk=None):
             return Response(status=status.HTTP_204_NO_CONTENT)
         except Payment.DoesNotExist:
             return Response({'detail': 'Payment not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsTeacher])
+def teacher_notifications_low_balance_view(request):
+    """
+    GET /api/teacher/notifications/low-balance
+    Returns students with real_balance <= 0 for teacher alert list.
+    Dynamic: computed from DB, auto-removes after topup.
+    Response: { unread_count: int, items: [{studentId, fullName, grade, displayBalanceTeacher, realBalance, reason}] }
+    """
+    from decimal import Decimal
+    from django.db.models import OuterRef, Subquery
+    from students.models import BalanceLedger
+    from groups.models import GroupStudent
+    
+    qs = StudentProfile.objects.filter(
+        is_deleted=False,
+        balance__lte=Decimal('0'),
+    )
+    qs = filter_by_organization(qs, request.user, 'user__organization')
+
+    # Get last lesson charge date from BalanceLedger
+    last_debit = BalanceLedger.objects.filter(
+        student_profile=OuterRef('pk'),
+        reason=BalanceLedger.REASON_LESSON_CHARGE,
+    ).order_by('-date').values('date')[:1]
+
+    # Get first active group
+    first_group = GroupStudent.objects.filter(
+        student_profile=OuterRef('pk'),
+        active=True,
+        left_at__isnull=True,
+    ).order_by('joined_at').values('group_id')[:1]
+
+    qs = qs.annotate(
+        last_lesson_date=Subquery(last_debit),
+        first_group_id=Subquery(first_group),
+    ).select_related('user')
+
+    group_ids = list(qs.values_list('first_group_id', flat=True))
+    group_ids = [g for g in group_ids if g is not None]
+    groups_map = {}
+    if group_ids:
+        for g in Group.objects.filter(id__in=group_ids).values('id', 'name'):
+            groups_map[g['id']] = g['name']
+
+    items = []
+    for sp in qs:
+        balance_real = float(sp.balance)
+        # Double-check: only include students with balance <= 0
+        if balance_real > 0:
+            continue
+        items.append({
+            'studentId': str(sp.id),
+            'fullName': sp.user.full_name,
+            'grade': sp.grade or '',
+            'displayBalanceTeacher': round(balance_real / 4, 2),
+            'realBalance': balance_real,
+            'reason': 'BALANCE_ZERO',
+            'groupId': str(sp.first_group_id) if sp.first_group_id else None,
+            'groupName': groups_map.get(sp.first_group_id, ''),
+            'lastLessonDate': sp.last_lesson_date.isoformat() if sp.last_lesson_date else None,
+        })
+    
+    return Response({
+        'unread_count': len(items),
+        'items': items,
+    })

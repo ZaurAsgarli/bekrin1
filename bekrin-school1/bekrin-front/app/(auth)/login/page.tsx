@@ -42,7 +42,19 @@ function LoginForm() {
     setGeneralError(null);
     loginMutation.mutate(values, {
       onError: (err: any) => {
-        setGeneralError(err?.message || "Giriş zamanı xəta baş verdi");
+        let errorMessage = err?.message || "Giriş zamanı xəta baş verdi";
+        
+        // Network error handling
+        if (errorMessage.includes("Failed to fetch") || errorMessage.includes("Backend server")) {
+          errorMessage = 
+            "Backend server ilə əlaqə qurula bilmədi.\n\n" +
+            "Zəhmət olmasa yoxlayın:\n" +
+            "1. Backend server işləyir? (http://localhost:8000)\n" +
+            "2. Terminal-də 'python manage.py runserver' işləyir?\n" +
+            "3. Browser console-da xəta var?";
+        }
+        
+        setGeneralError(errorMessage);
       },
     });
   };
@@ -60,7 +72,7 @@ function LoginForm() {
           </p>
 
           {generalError && (
-            <div className="mb-4 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <div className="mb-4 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 whitespace-pre-line">
               {generalError}
             </div>
           )}

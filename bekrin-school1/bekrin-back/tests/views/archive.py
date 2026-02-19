@@ -229,3 +229,59 @@ def hard_delete_pdf_view(request, pk):
         return Response({'detail': 'Archive first'}, status=status.HTTP_400_BAD_REQUEST)
     pdf.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsTeacher])
+def bulk_delete_exams_view(request):
+    """Bulk delete archived exams. Body: { ids: [1, 2, 3] }"""
+    ids = request.data.get('ids', [])
+    if not isinstance(ids, list) or not ids:
+        return Response({'detail': 'ids array required'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    qs = Exam.objects.filter(pk__in=ids, is_archived=True)
+    if not getattr(settings, 'SINGLE_TENANT', True):
+        qs = qs.filter(created_by=request.user)
+    
+    # Check for attempts
+    exams_with_attempts = qs.filter(attempts__isnull=False).distinct()
+    if exams_with_attempts.exists():
+        return Response({
+            'detail': 'Some exams have attempts and cannot be deleted',
+            'exam_ids': list(exams_with_attempts.values_list('id', flat=True))
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    deleted_count = qs.count()
+    qs.delete()
+    return Response({'deleted': deleted_count, 'message': f'{deleted_count} exam(s) deleted'})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsTeacher])
+def bulk_delete_questions_view(request):
+    """Bulk delete archived questions. Body: { ids: [1, 2, 3] }"""
+    ids = request.data.get('ids', [])
+    if not isinstance(ids, list) or not ids:
+        return Response({'detail': 'ids array required'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    qs = Question.objects.filter(pk__in=ids, is_archived=True)
+    deleted_count = qs.count()
+    qs.delete()
+    return Response({'deleted': deleted_count, 'message': f'{deleted_count} question(s) deleted'})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsTeacher])
+def bulk_delete_pdfs_view(request):
+    """Bulk delete archived PDFs. Body: { ids: [1, 2, 3] }"""
+    ids = request.data.get('ids', [])
+    if not isinstance(ids, list) or not ids:
+        return Response({'detail': 'ids array required'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    qs = TeacherPDF.objects.filter(pk__in=ids, is_archived=True)
+    if not getattr(settings, 'SINGLE_TENANT', True):
+        qs = qs.filter(teacher=request.user)
+    
+    deleted_count = qs.count()
+    qs.delete()
+    return Response({'deleted': deleted_count, 'message': f'{deleted_count} PDF(s) deleted'})

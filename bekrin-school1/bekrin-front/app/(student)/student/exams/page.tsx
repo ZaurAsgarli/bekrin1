@@ -6,6 +6,7 @@ import { studentApi } from "@/lib/student";
 import { Loading } from "@/components/Loading";
 import { CanvasPad } from "@/components/exam/CanvasPad";
 import { Modal } from "@/components/Modal";
+import { useToast } from "@/components/Toast";
 import { Send, Clock, Eye, AlertCircle } from "lucide-react";
 
 const LABELS = ["A", "B", "C", "D", "E", "F"];
@@ -141,12 +142,13 @@ export default function StudentExamsPage() {
     questions: StartedQuestion[];
     canvases?: { canvasId: number; questionId?: number; situationIndex?: number; imageUrl: string | null; updatedAt: string }[];
   } | null>(null);
-  const [answers, setAnswers] = useState<Record<string, { selectedOptionId?: number; selectedOptionKey?: string; textAnswer?: string }>>({});
+  const [answers, setAnswers] = useState<Record<string, { selectedOptionId?: number | string; selectedOptionKey?: string; textAnswer?: string }>>({});
   const [submitted, setSubmitted] = useState<{ autoScore: number; maxScore: number } | null>(null);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [expired, setExpired] = useState(false);
   const [reviewDisabledMessage, setReviewDisabledMessage] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  const toast = useToast();
 
   const expiresAt = startedExam?.expiresAt ?? startedExam?.endTime;
   const [countdownMs, setCountdownMs] = useState(0);
@@ -180,9 +182,15 @@ export default function StudentExamsPage() {
     mutationFn: (runId: number) => studentApi.startRun(runId),
     onError: (err: unknown) => {
       const msg = (err as { message?: string })?.message ?? "";
-      if (msg.includes("yoxlaması söndürülüb") || msg.includes("Already submitted")) {
-        setReviewDisabledMessage("İmtahan yoxlaması söndürülüb");
+      if (msg.includes("Already submitted") || msg.toLowerCase().includes("already submitted")) {
+        toast.info("Bu imtahan artıq təhvil verilib.");
+        return;
       }
+      if (msg.includes("yoxlaması söndürülüb")) {
+        toast.info("İmtahan yoxlaması söndürülüb.");
+        return;
+      }
+      toast.error(msg || "İmtahan başladılmadı.");
     },
     onSuccess: (data) => {
       setReviewDisabledMessage(null);
@@ -250,15 +258,36 @@ export default function StudentExamsPage() {
   );
 
   const submitMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!startedExam) throw new Error("No exam");
+      
+      // Final save all canvas pads before submitting
+      const canvasElements = document.querySelectorAll('canvas[data-canvas-pad="true"]');
+      await Promise.all(
+        Array.from(canvasElements).map(async (canvas) => {
+          const finalSave = (canvas as any).finalSave;
+          if (finalSave && typeof finalSave === 'function') {
+            try {
+              await finalSave();
+            } catch (e) {
+              console.warn("Failed to final save canvas", e);
+            }
+          }
+        })
+      );
+      
       const answersList = startedExam.questions.map((q) => {
         const key = getAnswerKey(q);
         const a = answers[key];
         if (q.questionId != null) {
           return { questionId: q.questionId, selectedOptionId: a?.selectedOptionId ?? null, textAnswer: a?.textAnswer ?? "" };
         }
-        return { questionNumber: q.questionNumber, selectedOptionKey: a?.selectedOptionKey ?? undefined, textAnswer: a?.textAnswer ?? "" };
+        return {
+          questionNumber: q.questionNumber,
+          selectedOptionId: a?.selectedOptionId ?? undefined,
+          selectedOptionKey: a?.selectedOptionKey ?? undefined,
+          textAnswer: a?.textAnswer ?? "",
+        };
       });
       return studentApi.submitExam(startedExam.examId, startedExam.attemptId, answersList);
     },
@@ -342,6 +371,19 @@ export default function StudentExamsPage() {
               </button>
             </div>
           </div>
+
+          {startedExam.pdfUrl && (
+              <section className="mb-6">
+                <h2 className="text-lg font-semibold text-slate-900 mb-2">İmtahan PDF</h2>
+                <div className="rounded-lg border border-slate-200 overflow-hidden bg-slate-50">
+                  <iframe
+                    title="İmtahan PDF"
+                    src={startedExam.pdfUrl}
+                    className="w-full min-h-[480px] max-h-[70vh]"
+                  />
+                </div>
+              </section>
+            )}
 
           <form
             onSubmit={(e) => {

@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { teacherApi, Group } from "@/lib/teacher";
+import { teacherApi, Group, LESSON_DAY_LABELS, deriveDisplayNameFromDays } from "@/lib/teacher";
 import { Loading } from "@/components/Loading";
 import { Modal } from "@/components/Modal";
 import { useForm } from "react-hook-form";
@@ -137,11 +137,24 @@ function GroupDetailContent({
   );
 }
 
-const groupSchema = z.object({
-  name: z.string().min(1, "Qrup adı tələb olunur"),
-});
+const groupSchema = z
+  .object({
+    name: z.string().min(1, "Qrup adı tələb olunur"),
+    lesson_days: z.array(z.number().min(1).max(7)).optional(),
+    start_time: z.string().optional(),
+    display_name: z.string().optional(),
+    display_name_is_manual: z.boolean().optional(),
+    monthly_fee: z.number().min(0).optional().nullable(),
+    monthly_lessons_count: z.number().int().min(1).optional(),
+  })
+  .refine(
+    (data) => !data.lesson_days || data.lesson_days.length >= 1,
+    { message: "Ən azı bir dərs günü seçilməlidir", path: ["lesson_days"] }
+  );
 
 type GroupFormValues = z.infer<typeof groupSchema>;
+
+const WEEKDAY_KEYS = [1, 2, 3, 4, 5, 6, 7] as const;
 
 export default function GroupsPage() {
   const router = useRouter();
@@ -158,7 +171,8 @@ export default function GroupsPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (name: string) => teacherApi.createGroup(name),
+    mutationFn: (data: { name: string; lesson_days?: number[]; start_time?: string | null; display_name?: string | null; display_name_is_manual?: boolean; monthly_fee?: number | null; monthly_lessons_count?: number }) =>
+      teacherApi.createGroup(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["teacher", "groups"] });
       setEditingGroup(null);
@@ -186,9 +200,31 @@ export default function GroupsPage() {
     handleSubmit,
     formState: { errors },
     reset,
+    watch,
+    setValue,
   } = useForm<GroupFormValues>({
     resolver: zodResolver(groupSchema),
+    defaultValues: {
+      name: "",
+      lesson_days: [2, 4],
+      start_time: "11:00",
+      display_name: "",
+      display_name_is_manual: false,
+      monthly_fee: null,
+      monthly_lessons_count: 8,
+    },
   });
+
+  const watchedLessonDays = watch("lesson_days") ?? [];
+  const watchedDisplayNameIsManual = watch("display_name_is_manual") ?? false;
+  const watchedStartTime = watch("start_time");
+
+  useEffect(() => {
+    if (!watchedDisplayNameIsManual && Array.isArray(watchedLessonDays) && watchedLessonDays.length > 0) {
+      const derived = deriveDisplayNameFromDays(watchedLessonDays, watchedStartTime);
+      setValue("display_name", derived, { shouldDirty: false });
+    }
+  }, [watchedDisplayNameIsManual, watchedLessonDays, watchedStartTime, setValue]);
 
   useEffect(() => {
     if (!groupIdParam) {
@@ -220,14 +256,51 @@ export default function GroupsPage() {
 
   const handleEdit = (group: Group) => {
     setEditingGroup(group);
-    reset({ name: group.name });
+    const st = group.start_time;
+    const timeVal = st && /^\d{2}:\d{2}/.test(st) ? st.slice(0, 5) : "11:00";
+    reset({
+      name: group.name,
+      lesson_days: group.lesson_days?.length ? group.lesson_days : [2, 4],
+      start_time: timeVal,
+      display_name: group.display_name ?? "",
+      display_name_is_manual: group.display_name_is_manual ?? false,
+      monthly_fee: (group as any).monthly_fee ?? null,
+      monthly_lessons_count: (group as any).monthly_lessons_count ?? 8,
+    });
+  };
+
+  const toggleLessonDay = (day: number) => {
+    const current = watch("lesson_days") ?? [];
+    const next = current.includes(day)
+      ? current.filter((d) => d !== day)
+      : [...current, day].sort((a, b) => a - b);
+    setValue("lesson_days", next, { shouldValidate: true });
   };
 
   const onSubmit = (values: GroupFormValues) => {
-    if (editingGroup) {
-      updateMutation.mutate({ id: editingGroup.id, data: values });
+    if (editingGroup?.id) {
+      updateMutation.mutate({
+        id: editingGroup.id,
+        data: {
+          name: values.name,
+          lesson_days: values.lesson_days?.length ? values.lesson_days : undefined,
+          start_time: values.start_time ? `${values.start_time}:00` : undefined,
+          display_name: values.display_name || undefined,
+          display_name_is_manual: values.display_name_is_manual ?? false,
+          monthly_fee: values.monthly_fee ?? undefined,
+          monthly_lessons_count: values.monthly_lessons_count ?? undefined,
+        },
+      });
     } else {
-      createMutation.mutate(values.name);
+      createMutation.mutate({
+        name: values.name,
+        lesson_days: values.lesson_days?.length ? values.lesson_days : [2, 4],
+        start_time: values.start_time ? `${values.start_time}:00` : undefined,
+        display_name: values.display_name || undefined,
+        display_name_is_manual: values.display_name_is_manual ?? false,
+        monthly_fee: values.monthly_fee ?? undefined,
+        monthly_lessons_count: values.monthly_lessons_count ?? undefined,
+      });
       reset();
     }
   };
@@ -251,7 +324,15 @@ export default function GroupsPage() {
           <button
             onClick={() => {
               setEditingGroup({ id: "", name: "", studentCount: 0 } as Group);
-              reset();
+              reset({
+                name: "",
+                lesson_days: [2, 4],
+                start_time: "11:00",
+                display_name: deriveDisplayNameFromDays([2, 4], "11:00"),
+                display_name_is_manual: false,
+                monthly_fee: null,
+                monthly_lessons_count: 8,
+              });
             }}
             className="btn-primary"
           >
@@ -271,11 +352,16 @@ export default function GroupsPage() {
               <div className="flex items-start justify-between mb-4">
                 <div>
                   <h3 className="text-lg font-semibold text-slate-900 mb-2">
-                    {group.name}
+                    {group.display_name || group.name}
                   </h3>
                   <div className="flex items-center gap-2 text-sm text-slate-600">
                     <Users className="w-4 h-4" />
                     <span>{group.studentCount || 0} şagird</span>
+                    {(!group.lesson_days || group.lesson_days.length === 0) && (
+                      <span className="text-amber-600 text-xs" title="Dərs günləri təyin edilməyib. Qrup ayarlarından seçin.">
+                        ⚠ Dərs günü yoxdur
+                      </span>
+                    )}
                   </div>
                 </div>
                 {editMode && (
@@ -347,6 +433,99 @@ export default function GroupsPage() {
             )}
           </div>
 
+          <div>
+            <label className="label">Başlama vaxtı</label>
+            <input
+              type="time"
+              className="input w-32"
+              {...register("start_time")}
+            />
+          </div>
+
+          <div>
+            <label className="label">Dərs günləri</label>
+            <div className="flex flex-wrap gap-2 mt-1">
+              {WEEKDAY_KEYS.map((day) => {
+                const selected = Array.isArray(watchedLessonDays) && watchedLessonDays.includes(day);
+                return (
+                  <button
+                    key={day}
+                    type="button"
+                    onClick={() => toggleLessonDay(day)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                      selected
+                        ? "bg-primary text-white"
+                        : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    }`}
+                  >
+                    {LESSON_DAY_LABELS[day]}
+                  </button>
+                );
+              })}
+            </div>
+            {errors.lesson_days && (
+              <p className="mt-1 text-xs text-red-600">{errors.lesson_days.message}</p>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={!watchedDisplayNameIsManual}
+                onChange={(e) => setValue("display_name_is_manual", !e.target.checked)}
+                className="w-4 h-4 rounded border-slate-300"
+              />
+              <span className="text-sm text-slate-700">Adı avtomatik yarat</span>
+            </label>
+            <span className="text-xs text-slate-500">
+              {watchedDisplayNameIsManual ? "Adı əl ilə yazın" : "Dərs günlərinə görə avtomatik"}
+            </span>
+          </div>
+
+          <div>
+            <label className="label">Qrup göstərici adı</label>
+            <input
+              type="text"
+              className="input"
+              placeholder="Məs: 1-4 11:00"
+              {...register("display_name")}
+              readOnly={!watchedDisplayNameIsManual}
+              disabled={!watchedDisplayNameIsManual}
+              style={{ opacity: watchedDisplayNameIsManual ? 1 : 0.7 }}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 pt-2 border-t border-slate-200">
+            <div>
+              <label className="label">Aylıq haqq (AZN)</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                className="input"
+                placeholder="Məs: 100"
+                {...register("monthly_fee", { valueAsNumber: true })}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                Real ödəniş məbləği (parent view)
+              </p>
+            </div>
+            <div>
+              <label className="label">Ayda dərs sayı</label>
+              <input
+                type="number"
+                min="1"
+                className="input"
+                placeholder="8"
+                {...register("monthly_lessons_count", { valueAsNumber: true })}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                Hər dərs üçün: aylıq haqq / dərs sayı
+              </p>
+            </div>
+          </div>
+
           <div className="flex gap-3 pt-4">
             <button
               type="submit"
@@ -372,7 +551,7 @@ export default function GroupsPage() {
       <Modal
         isOpen={!!groupDetail}
         onClose={closeGroupDetail}
-        title={`${groupDetail?.name} - Ətraflı Məlumat`}
+        title={`${groupDetail?.display_name || groupDetail?.name} - Ətraflı Məlumat`}
         size="lg"
       >
         {groupDetail && (

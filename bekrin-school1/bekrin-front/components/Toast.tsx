@@ -11,9 +11,10 @@ interface Toast {
 }
 
 interface ToastContextValue {
-  show: (message: string, type?: ToastType) => void;
-  success: (message: string) => void;
-  error: (message: string) => void;
+  show: (message: string, type?: ToastType, options?: { duration?: number }) => void;
+  success: (message: string, options?: { duration?: number }) => void;
+  error: (message: string, options?: { duration?: number }) => void;
+  info: (message: string, options?: { duration?: number }) => void;
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -21,19 +22,21 @@ const ToastContext = createContext<ToastContextValue | null>(null);
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
-  const show = useCallback((message: string, type: ToastType = "info") => {
+  const show = useCallback((message: string, type: ToastType = "info", options?: { duration?: number }) => {
     const id = Math.random().toString(36).slice(2);
+    const duration = options?.duration ?? 4000;
     setToasts((prev) => [...prev, { id, message, type }]);
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4000);
+    }, duration);
   }, []);
 
-  const success = useCallback((message: string) => show(message, "success"), [show]);
-  const error = useCallback((message: string) => show(message, "error"), [show]);
+  const success = useCallback((message: string, options?: { duration?: number }) => show(message, "success", options), [show]);
+  const error = useCallback((message: string, options?: { duration?: number }) => show(message, "error", options), [show]);
+  const info = useCallback((message: string, options?: { duration?: number }) => show(message, "info", options), [show]);
 
   return (
-    <ToastContext.Provider value={{ show, success, error }}>
+    <ToastContext.Provider value={{ show, success, error, info }}>
       {children}
       <div
         className="fixed bottom-4 right-4 z-50 flex flex-col gap-2"
@@ -65,6 +68,7 @@ export function useToast() {
       show: () => {},
       success: () => {},
       error: () => {},
+      info: () => {},
     };
   }
   return ctx;

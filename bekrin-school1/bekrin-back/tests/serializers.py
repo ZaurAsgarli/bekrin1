@@ -192,6 +192,7 @@ class ExamDetailSerializer(serializers.ModelSerializer):
     pdf_url = serializers.SerializerMethodField()
     has_answer_key = serializers.SerializerMethodField()
     question_counts = serializers.SerializerMethodField()
+    answer_key_preview = serializers.SerializerMethodField()
     runs = serializers.SerializerMethodField()
 
     class Meta:
@@ -199,7 +200,7 @@ class ExamDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'type', 'source_type', 'start_time', 'end_time', 'status',
             'duration_minutes', 'max_score', 'pdf_file', 'pdf_document', 'pdf_url',
-            'is_result_published', 'has_answer_key', 'question_counts',
+            'is_result_published', 'has_answer_key', 'question_counts', 'answer_key_preview',
             'questions', 'assigned_groups', 'runs', 'created_at',
         ]
 
@@ -209,11 +210,27 @@ class ExamDetailSerializer(serializers.ModelSerializer):
         return []
 
     def get_pdf_url(self, obj):
+        request = self.context.get('request')
         if obj.pdf_document and obj.pdf_document.file:
-            request = self.context.get('request')
+            try:
+                if not obj.pdf_document.file.storage.exists(obj.pdf_document.file.name):
+                    return None
+            except Exception:
+                return None
+            url = obj.pdf_document.file.url
             if request:
-                return request.build_absolute_uri(obj.pdf_document.file.url)
-            return obj.pdf_document.file.url
+                return request.build_absolute_uri(url)
+            return url
+        if obj.pdf_file:
+            try:
+                if not obj.pdf_file.storage.exists(obj.pdf_file.name):
+                    return None
+            except Exception:
+                return None
+            url = obj.pdf_file.url
+            if request:
+                return request.build_absolute_uri(url)
+            return url
         return None
 
     def get_has_answer_key(self, obj):
@@ -235,6 +252,21 @@ class ExamDetailSerializer(serializers.ModelSerializer):
             from .answer_key import get_answer_key_question_counts
             return get_answer_key_question_counts(obj.answer_key_json)
         return None
+
+    def get_answer_key_preview(self, obj):
+        """Teacher-only: list of { number, kind, correct, open_answer } from answer_key_json for Cavab vərəqi panel."""
+        if obj.source_type not in ('PDF', 'JSON') or not obj.answer_key_json or not isinstance(obj.answer_key_json, dict):
+            return None
+        questions = obj.answer_key_json.get('questions') or []
+        return [
+            {
+                'number': q.get('number'),
+                'kind': (q.get('kind') or '').strip().lower(),
+                'correct': q.get('correct'),
+                'open_answer': q.get('open_answer') or q.get('answer'),
+            }
+            for q in questions if isinstance(q, dict)
+        ]
 
     def get_runs(self, obj):
         if not hasattr(obj, 'runs'):
@@ -275,6 +307,12 @@ class TeacherPDFSerializer(serializers.ModelSerializer):
 
     def get_file_url(self, obj):
         if obj.file:
+            # Check if file actually exists on disk
+            try:
+                if not obj.file.storage.exists(obj.file.name):
+                    return None
+            except Exception:
+                return None
             request = self.context.get('request')
             if request:
                 # Build absolute URL for media file
