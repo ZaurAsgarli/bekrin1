@@ -378,7 +378,7 @@ export default function StudentExamsPage() {
                 <div className="rounded-lg border border-slate-200 overflow-hidden bg-slate-50">
                   <iframe
                     title="İmtahan PDF"
-                    src={startedExam.pdfUrl}
+                    src={`${startedExam.pdfUrl}${startedExam.pdfUrl.includes('?') ? '&' : '?'}embedded=true`}
                     className="w-full min-h-[480px] max-h-[70vh]"
                   />
                 </div>

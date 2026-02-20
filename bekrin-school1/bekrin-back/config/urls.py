@@ -5,9 +5,11 @@ from django.contrib import admin
 from django.urls import path, include
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
+from django.views.decorators.clickjacking import xframe_options_exempt
 from django.views.generic import RedirectView
 from django.conf import settings
 from django.conf.urls.static import static
+from django.views.static import serve
 from drf_spectacular.views import (
     SpectacularAPIView,
     SpectacularSwaggerView,
@@ -93,6 +95,13 @@ urlpatterns = [
     path('api/parent/', include('students.urls.parent')),
 ]
 
-# Serve media files in development
+# Serve media files in development with iframe exemption for PDFs
 if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    @xframe_options_exempt
+    def media_serve(request, path):
+        """Custom media file serving view that allows iframe embedding."""
+        return serve(request, path, document_root=settings.MEDIA_ROOT)
+    
+    # MEDIA_URL is '/media/', so we need 'media/<path:path>' pattern
+    media_url_pattern = settings.MEDIA_URL.lstrip('/')
+    urlpatterns += [path(f'{media_url_pattern}<path:path>', media_serve)]

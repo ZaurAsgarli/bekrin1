@@ -18,8 +18,23 @@ def custom_exception_handler(exc, context):
     Custom exception handler that returns:
     { "detail": str, "code": str (optional), "errors": dict (optional) }
     """
+    # STEP 2 — LOG EXCEPTION HANDLER (DRF only, not called for regular Django views)
+    request = context.get('request') if context else None
+    path = request.path if request else 'unknown'
+    is_pdf = '/pdf' in path.lower() if path else False
+    
+    if is_pdf:
+        print(f"[STEP 2] EXCEPTION_HANDLER CALLED for PDF path: {path}")
+        print(f"[STEP 2]   Exception type: {type(exc).__name__}")
+        print(f"[STEP 2]   Exception: {exc}")
+        print(f"[STEP 2]   ⚠️  WARNING: Exception handler replacing response!")
+    
     response = exception_handler(exc, context)
     if response is not None:
+        if is_pdf:
+            print(f"[STEP 2]   Response type: {type(response).__name__}")
+            print(f"[STEP 2]   Response Content-Type: {response.get('Content-Type')}")
+            print(f"[STEP 2]   Response status: {response.status_code}")
         data = response.data if isinstance(response.data, dict) else {'detail': str(response.data)}
         if 'detail' not in data and response.data:
             data = {'detail': data.get('message', str(response.data))}

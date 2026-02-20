@@ -196,6 +196,13 @@ CSRF_TRUSTED_ORIGINS = env.list(
     default=['http://localhost:3000']
 )
 
+# Source - https://stackoverflow.com/a/45327676
+# Posted by J.Jai, modified by community. See post 'Timeline' for change history
+# Retrieved 2026-02-20, License - CC BY-SA 4.0
+X_FRAME_OPTIONS = 'SAMEORIGIN'
+
+XS_SHARING_ALLOWED_METHODS = ['POST','GET','OPTIONS', 'PUT', 'DELETE']
+
 # Credential encryption (for ImportedCredentialRecord)
 # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 CREDENTIALS_ENCRYPTION_KEY = env('CREDENTIALS_ENCRYPTION_KEY', default=None)

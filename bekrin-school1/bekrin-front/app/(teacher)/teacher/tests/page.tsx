@@ -792,15 +792,19 @@ export default function TestsPage() {
                   <div className="mb-6 grid grid-cols-1 lg:grid-cols-3 gap-4 border-b border-slate-200 pb-6">
                     <div className="lg:col-span-2">
                       <h4 className="text-sm font-medium text-slate-700 mb-2">PDF baxış</h4>
-                      {(examDetail as { pdf_url?: string })?.pdf_url ? (
-                        <div className="rounded-lg border border-slate-200 overflow-hidden bg-slate-50">
-                          <iframe
-                            title="İmtahan PDF"
-                            src={(examDetail as { pdf_url?: string }).pdf_url!}
-                            className="w-full min-h-[400px] max-h-[60vh]"
-                          />
-                        </div>
-                      ) : (
+                      {(examDetail as { pdf_url?: string })?.pdf_url ? (() => {
+                        const pdfUrl = (examDetail as { pdf_url?: string }).pdf_url!;
+                        const embeddedUrl = `${pdfUrl}${pdfUrl.includes('?') ? '&' : '?'}embedded=true`;
+                        return (
+                          <div className="rounded-lg border border-slate-200 overflow-hidden bg-slate-50">
+                            <iframe
+                              title="İmtahan PDF"
+                              src={embeddedUrl}
+                              className="w-full min-h-[400px] max-h-[60vh]"
+                            />
+                          </div>
+                        );
+                      })() : (
                         <p className="text-sm text-slate-500 py-4">PDF yüklənməyib və ya mövcud deyil.</p>
                       )}
                     </div>
