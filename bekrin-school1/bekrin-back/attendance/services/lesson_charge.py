@@ -2,10 +2,12 @@
 Lesson charge service: when the first attendance for a group+date is saved,
 open a lesson session and debit all active students once (idempotent).
 Mon=1 .. Sun=7 (Azeri UI).
+Balance deduction uses F() so the DB performs the update (guaranteed persistence).
 """
 import logging
 from decimal import Decimal
 from django.db import transaction
+from django.db.models import F
 from django.conf import settings
 
 from groups.models import Group
@@ -93,10 +95,11 @@ def maybe_open_session_and_charge(group: Group, lesson_date):
             return
 
         debit_amount = -per_lesson
+        student_ids = [sp.id for sp in students]
         if settings.DEBUG:
             logger.debug(f"[lesson_charge] Debit amount: {debit_amount}")
             for sp in students:
-                logger.debug(f"[lesson_charge] Student {sp.id} ({sp.user.full_name}): balance before={sp.balance}")
+                logger.debug(f"[lesson_charge] BEFORE BALANCE: student_id={sp.id} balance={sp.balance} DEDUCTION: {debit_amount}")
         
         transactions = [
             BalanceTransaction(
@@ -112,12 +115,12 @@ def maybe_open_session_and_charge(group: Group, lesson_date):
         if settings.DEBUG:
             logger.debug(f"[lesson_charge] Created {len(transactions)} BalanceTransaction records")
 
-        for sp in students:
-            old_balance = sp.balance or Decimal("0")
-            sp.balance = old_balance + debit_amount
-            if settings.DEBUG:
-                logger.debug(f"[lesson_charge] Student {sp.id}: {old_balance} -> {sp.balance}")
-        
-        StudentProfile.objects.bulk_update(students, ["balance"])
+        # Atomic DB update: balance = balance + debit_amount (guaranteed persistence)
+        updated_count = StudentProfile.objects.filter(id__in=student_ids).update(
+            balance=F("balance") + debit_amount
+        )
         if settings.DEBUG:
-            logger.debug(f"[lesson_charge] Updated {len(students)} StudentProfile balances")
+            logger.debug(f"[lesson_charge] DB UPDATE F(): updated_count={updated_count}")
+            for sp in students:
+                sp.refresh_from_db()
+                logger.debug(f"[lesson_charge] AFTER SAVE: student_id={sp.id} balance={sp.balance}")

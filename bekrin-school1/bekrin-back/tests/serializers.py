@@ -329,6 +329,13 @@ class TeacherPDFSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         pdf = TeacherPDF.objects.create(**validated_data)
         if pdf.file:
-            pdf.file_size = pdf.file.size
+            try:
+                size = pdf.file.size
+            except Exception:
+                size = 0
+            if size <= 0:
+                pdf.delete()  # Do not keep 0-byte files (would show empty in viewer)
+                raise serializers.ValidationError({'file': 'Uploaded file is empty or unreadable.'})
+            pdf.file_size = size
             pdf.save(update_fields=['file_size'])
         return pdf

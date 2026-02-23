@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useQueryClient } from "@tanstack/react-query";
 import { useMe, changePassword } from "@/lib/auth";
 import { Loading } from "@/components/Loading";
 import { useState } from "react";
@@ -24,6 +25,7 @@ type FormValues = z.infer<typeof schema>;
 
 export default function ChangePasswordPage() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { data: user, isLoading: meLoading } = useMe();
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -54,6 +56,8 @@ export default function ChangePasswordPage() {
     try {
       await changePassword(values.currentPassword, values.newPassword);
       setSuccess(true);
+      // Refetch /auth/me so cache has mustChangePassword: false before redirect (avoids redirect loop)
+      await queryClient.refetchQueries({ queryKey: ["auth", "me"] });
       const role = user?.role || "teacher";
       setTimeout(() => {
         if (role === "teacher") router.replace("/teacher");

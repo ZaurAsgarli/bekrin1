@@ -8,9 +8,9 @@ import {
   CredentialRecord,
   Group,
 } from "@/lib/teacher";
-import { Loading } from "@/components/Loading";
 import { useToast } from "@/components/Toast";
 import { Modal } from "@/components/Modal";
+import { useDebounce } from "@/lib/useDebounce";
 import { Eye, Download, Search, Copy } from "lucide-react";
 
 export default function CredentialsPage() {
@@ -21,7 +21,8 @@ export default function CredentialsPage() {
   useEffect(() => {
     if (groupFromUrl) setGroupFilter(groupFromUrl);
   }, [groupFromUrl]);
-  const [search, setSearch] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const debouncedSearch = useDebounce(searchInput, 400);
   const [page, setPage] = useState(1);
   const [revealModal, setRevealModal] = useState<{
     record: CredentialRecord;
@@ -39,14 +40,17 @@ export default function CredentialsPage() {
   });
 
   const { data, isLoading } = useQuery({
-    queryKey: ["teacher", "credentials", groupFilter, search, page],
-    queryFn: () =>
-      teacherApi.getCredentials({
-        groupId: groupFilter || undefined,
-        search: search.trim() || undefined,
-        page,
-        pageSize: 50,
-      }),
+    queryKey: ["teacher", "credentials", groupFilter, debouncedSearch, page],
+    queryFn: ({ signal }) =>
+      teacherApi.getCredentials(
+        {
+          groupId: groupFilter || undefined,
+          search: debouncedSearch.trim() || undefined,
+          page,
+          pageSize: 50,
+        },
+        signal
+      ),
   });
 
   const revealMutation = useMutation({
@@ -68,7 +72,7 @@ export default function CredentialsPage() {
     try {
       await teacherApi.exportCredentialsCsv({
         groupId: groupFilter || undefined,
-        search: search.trim() || undefined,
+        search: debouncedSearch.trim() || undefined,
       });
       toast.success("CSV export edildi");
     } catch (err: { message?: string } | unknown) {
@@ -86,8 +90,6 @@ export default function CredentialsPage() {
   const results = data?.results ?? [];
   const totalCount = data?.count ?? 0;
   const totalPages = Math.ceil(totalCount / 50) || 1;
-
-  if (isLoading) return <Loading />;
 
   return (
     <div className="page-container">
@@ -115,9 +117,9 @@ export default function CredentialsPage() {
             <input
               type="text"
               placeholder="Ad və ya email ilə axtar..."
-              value={search}
+              value={searchInput}
               onChange={(e) => {
-                setSearch(e.target.value);
+                setSearchInput(e.target.value);
                 setPage(1);
               }}
               className="input pl-10 w-full"
@@ -155,7 +157,14 @@ export default function CredentialsPage() {
             </tr>
           </thead>
           <tbody>
-            {results.length > 0 ? (
+            {isLoading ? (
+              <tr>
+                <td colSpan={7} className="py-12 text-center text-slate-500">
+                  <span className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                  <span className="ml-2">Yüklənir...</span>
+                </td>
+              </tr>
+            ) : results.length > 0 ? (
               results.map((rec) => (
                 <tr key={rec.id} className="border-b border-slate-100 hover:bg-slate-50">
                   <td className="py-3 px-4 text-sm font-medium text-slate-900">{rec.studentFullName}</td>

@@ -108,9 +108,18 @@ export const teacherApi = {
   markNotificationRead: (notificationId: number) =>
     api.post(`/teacher/notifications/${notificationId}/read/`),
   
-  getStudents: (status?: "active" | "deleted") => {
-    const params = status ? `?status=${status}` : "";
-    return api.get<Student[]>(`/teacher/students${params}`);
+  getStudents: (
+    status?: "active" | "deleted",
+    search?: string,
+    signal?: AbortSignal
+  ) => {
+    const p = new URLSearchParams();
+    if (status) p.set("status", status);
+    if (search?.trim()) p.set("search", search.trim());
+    const qs = p.toString();
+    return api.get<Student[]>(`/teacher/students${qs ? `?${qs}` : ""}`, {
+      signal,
+    });
   },
 
   createStudent: (data: {
@@ -649,7 +658,10 @@ export const teacherApi = {
     ),
 
   // Credentials registry (imported account credentials)
-  getCredentials: (params?: { groupId?: string; search?: string; page?: number; pageSize?: number }) => {
+  getCredentials: (
+    params?: { groupId?: string; search?: string; page?: number; pageSize?: number },
+    signal?: AbortSignal
+  ) => {
     const sp = new URLSearchParams();
     if (params?.groupId) sp.set("group_id", params.groupId);
     if (params?.search) sp.set("search", params.search);
@@ -661,7 +673,7 @@ export const teacherApi = {
       next: string | null;
       previous: string | null;
       results: CredentialRecord[];
-    }>(`/teacher/credentials${qs ? `?${qs}` : ""}`);
+    }>(`/teacher/credentials${qs ? `?${qs}` : ""}`, { signal });
   },
   revealCredential: (id: number) =>
     api.post<CredentialRecord & { studentPassword?: string; parentPassword?: string }>(

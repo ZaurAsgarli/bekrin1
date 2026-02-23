@@ -81,6 +81,12 @@ def teacher_students_view(request, pk=None):
             students = _deleted_students_queryset(request)
         else:
             students = _active_students_queryset(request)
+        # Optional search: filter by full name at database level (case-insensitive)
+        search_query = (request.query_params.get('search') or '').strip()
+        if search_query:
+            students = students.filter(
+                Q(user__full_name__icontains=search_query)
+            )
         if settings.DEBUG:
             import sys
             print(f'[teacher_students] count={students.count()}, org={getattr(request.user, "organization_id", None)}', file=sys.stderr)

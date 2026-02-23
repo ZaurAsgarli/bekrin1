@@ -66,7 +66,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'config.middleware.FrameOptionsExemptMiddleware',  # Allow /media/ and run PDF in iframes
+    # TEMPORARILY DISABLED to test if middleware corrupts PDF stream (0 of 0 pages). Re-enable after test.
+    # 'config.middleware.FrameOptionsExemptMiddleware',  # Allow /media/ and run PDF in iframes
 ]
 
 # Disable APPEND_SLASH for API endpoints (REST APIs typically don't use trailing slashes)

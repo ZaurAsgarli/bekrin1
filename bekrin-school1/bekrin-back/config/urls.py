@@ -95,13 +95,11 @@ urlpatterns = [
     path('api/parent/', include('students.urls.parent')),
 ]
 
-# Serve media files in development with iframe exemption for PDFs
-if settings.DEBUG:
-    @xframe_options_exempt
-    def media_serve(request, path):
-        """Custom media file serving view that allows iframe embedding."""
-        return serve(request, path, document_root=settings.MEDIA_ROOT)
-    
-    # MEDIA_URL is '/media/', so we need 'media/<path:path>' pattern
-    media_url_pattern = settings.MEDIA_URL.lstrip('/')
-    urlpatterns += [path(f'{media_url_pattern}<path:path>', media_serve)]
+# Serve media files (PDFs, uploads) with iframe exemption so PDFs display in teacher/student dashboards.
+@xframe_options_exempt
+def media_serve(request, path):
+    """Serve media files; allow iframe embedding for PDF preview."""
+    return serve(request, path, document_root=settings.MEDIA_ROOT)
+
+media_url_pattern = settings.MEDIA_URL.lstrip('/')
+urlpatterns += [path(f'{media_url_pattern}<path:path>', media_serve)]

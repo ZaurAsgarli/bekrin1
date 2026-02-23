@@ -5,7 +5,7 @@ List, filter, export, and reveal (with audit) imported credentials.
 import csv
 import io
 from django.db import models
-from django.db.models import Q
+from django.db.models import Q, Prefetch
 from django.contrib.auth import get_user_model
 
 from core.utils import belongs_to_user_organization
@@ -32,9 +32,21 @@ class CredentialsPagination(PageNumberPagination):
 
 def _credentials_queryset(request, group_id=None, search=None):
     org = request.user.organization
-    qs = ImportedCredentialRecord.objects.filter(
-        student__organization=org
-    ).select_related("student", "parent", "created_by").order_by("-created_at")
+    # Prefetch group memberships to avoid N+1 in _record_to_dict (groups list)
+    active_memberships = GroupStudent.objects.filter(
+        active=True, left_at__isnull=True
+    ).select_related("group")
+    qs = (
+        ImportedCredentialRecord.objects.filter(student__organization=org)
+        .select_related("student", "student__student_profile", "parent", "created_by")
+        .prefetch_related(
+            Prefetch(
+                "student__student_profile__group_memberships",
+                queryset=active_memberships,
+            )
+        )
+        .order_by("-created_at")
+    )
 
     if group_id:
         qs = qs.filter(
@@ -57,15 +69,12 @@ def _credentials_queryset(request, group_id=None, search=None):
 def _record_to_dict(rec, include_password=False):
     from students.credential_crypto import decrypt_credentials
 
-    groups = list(
-        GroupStudent.objects.filter(
-            student_profile=rec.student.student_profile,
-            active=True,
-            left_at__isnull=True,
-        )
-        .select_related("group")
-        .values_list("group__name", flat=True)
-    )
+    # Use prefetched group_memberships to avoid N+1
+    try:
+        profile = rec.student.student_profile
+        groups = [m.group.name for m in profile.group_memberships.all()]
+    except Exception:
+        groups = []
     data = {
         "id": rec.id,
         "studentFullName": rec.student_full_name,

@@ -367,26 +367,19 @@ export default function AttendancePage() {
       queryClient.invalidateQueries({ queryKey: ["teacher", "students"] });
       queryClient.invalidateQueries({ queryKey: ["teacher", "stats"] });
       
-      // Show detailed success message with proof fields (PART 0)
+      // Success / already marked: no balance info in toast
       if (data.charged && data.charged_count > 0) {
-        const chargeInfo = data.charged_students?.length 
-          ? ` Balanslar: ${data.charged_students.map((c: any) => `${c.oldBalance}→${c.newBalance}`).join(", ")}`
-          : "";
-        toast.success(
-          `✅ Davamiyyət saxlanıldı və dərs yekunlaşdırıldı. ${data.charged_count} şagirdin balansı yeniləndi.${chargeInfo}`,
-          { duration: 5000 }
-        );
+        toast.success("Attendance successfully marked.", { duration: 5000 });
       } else if (data.charged === false && data.finalize !== false) {
-        // Lesson already finalized for this date (idempotent - prevents double charge)
-        toast.info("Davamiyyət saxlanıldı. Bu tarix üçün dərs artıq yekunlaşdırılıb, ona görə balans yenidən azaldılmadı.");
+        toast.info("Attendance was already marked for this lesson.");
       } else {
-        toast.success(data.message || "Davamiyyət saxlanıldı");
+        toast.success("Attendance successfully marked.");
       }
       setLocalStatus({});
     },
     onError: (err: any) => {
       console.error("[ATTENDANCE_SAVE] Error:", err);
-      toast.error(err?.message || err?.detail || "Xəta baş verdi");
+      toast.error("Failed to mark attendance.");
     },
   });
 
@@ -442,10 +435,13 @@ export default function AttendancePage() {
   const handleSave = (finalize: boolean = false) => {
     if (!selectedGroupId || !dailyData) return;
     flushBatch();
-    const records = Object.entries(localStatus).map(([studentId, status]) => ({
-      studentId,
-      status,
-    }));
+    // Build records from daily students only; use daily key (student.id) for status so we never send grid composite keys (e.g. "1_2026-02-23") as studentId
+    const records = dailyData.students
+      .map((s) => ({
+        studentId: s.id,
+        status: localStatus[s.id] ?? ("absent" as AttendanceStatus),
+      }))
+      .filter((r) => r.status != null);
     saveMutation.mutate({
       date: selectedDate,
       groupId: selectedGroupId,

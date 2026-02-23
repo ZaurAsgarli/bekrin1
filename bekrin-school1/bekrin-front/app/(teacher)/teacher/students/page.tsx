@@ -4,7 +4,6 @@ import { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { teacherApi, Student } from "@/lib/teacher";
-import { Loading } from "@/components/Loading";
 import { useToast } from "@/components/Toast";
 import { Modal } from "@/components/Modal";
 import { useForm } from "react-hook-form";
@@ -12,7 +11,8 @@ import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import Link from "next/link";
 import { formatPaymentDisplay } from "@/lib/formatPayment";
-import { Pencil, Trash2, RotateCcw, X, UserPlus, Key } from "lucide-react";
+import { Pencil, Trash2, RotateCcw, X, UserPlus, Key, Search } from "lucide-react";
+import { useDebounce } from "@/lib/useDebounce";
 
 const studentSchema = z.object({
   fullName: z.string().min(1, "Ad Soyad tələb olunur"),
@@ -52,12 +52,15 @@ export default function StudentsPage() {
   const [deletingStudent, setDeletingStudent] = useState<Student | null>(null);
   const [restoringStudent, setRestoringStudent] = useState<Student | null>(null);
   const [hardDeletingStudent, setHardDeletingStudent] = useState<Student | null>(null);
+  const [searchInput, setSearchInput] = useState("");
+  const debouncedSearch = useDebounce(searchInput, 400);
   const queryClient = useQueryClient();
   const toast = useToast();
 
   const { data: students, isLoading } = useQuery({
-    queryKey: ["teacher", "students", activeTab],
-    queryFn: () => teacherApi.getStudents(activeTab),
+    queryKey: ["teacher", "students", activeTab, debouncedSearch],
+    queryFn: ({ signal }) =>
+      teacherApi.getStudents(activeTab, debouncedSearch || undefined, signal),
   });
 
   const createMutation = useMutation({
@@ -152,8 +155,6 @@ export default function StudentsPage() {
     }
   };
 
-  if (isLoading) return <Loading />;
-
   return (
     <div className="page-container">
       <div className="mb-6 flex items-center justify-between">
@@ -203,6 +204,24 @@ export default function StudentsPage() {
         </button>
       </div>
 
+      {/* Search */}
+      <div className="mb-4">
+        <label htmlFor="student-search" className="sr-only">
+          Şagird axtar
+        </label>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+          <input
+            id="student-search"
+            type="text"
+            placeholder="Ad soyad ilə axtar..."
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            className="input w-full max-w-md pl-10"
+          />
+        </div>
+      </div>
+
       {/* Table */}
       <div className="card overflow-x-auto">
         <table className="w-full">
@@ -232,7 +251,14 @@ export default function StudentsPage() {
             </tr>
           </thead>
           <tbody>
-            {students && students.length > 0 ? (
+            {isLoading ? (
+              <tr>
+                <td colSpan={7} className="py-12 text-center text-slate-500">
+                  <span className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                  <span className="ml-2">Yüklənir...</span>
+                </td>
+              </tr>
+            ) : students && students.length > 0 ? (
               students.map((student, idx) => (
                 <tr
                   key={student.id}

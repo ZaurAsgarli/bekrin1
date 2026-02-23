@@ -18,39 +18,9 @@ class FrameOptionsExemptMiddleware(MiddlewareMixin):
 
     def process_response(self, request, response):
         path = request.path
-        
-        # STEP 2 — LOG MIDDLEWARE CHAIN
-        response_type = type(response).__name__
         content_type = response.get('Content-Type', '')
-        status_code = getattr(response, 'status_code', None)
         is_pdf = 'application/pdf' in content_type.lower() or path.lower().endswith('.pdf') or '/pdf' in path.lower()
-        
-        print(f"[STEP 2] MIDDLEWARE: FrameOptionsExemptMiddleware")
-        print(f"[STEP 2]   Response type: {response_type}")
-        print(f"[STEP 2]   Content-Type: {content_type}")
-        print(f"[STEP 2]   Status code: {status_code}")
-        print(f"[STEP 2]   Is PDF path: {is_pdf}")
-        
-        if is_pdf:
-            has_streaming_content = hasattr(response, 'streaming_content')
-            print(f"[STEP 2]   Has streaming_content: {has_streaming_content}")
-            print(f"[STEP 2]   Is streaming: {getattr(response, 'streaming', False)}")
-            
-            # CRITICAL: Do NOT access response.content on streaming responses
-            # This would consume the iterator and cause empty PDF
-            if has_streaming_content:
-                print(f"[STEP 2]   WARNING: Streaming response - NOT accessing .content")
-            else:
-                # Check if response was replaced (not FileResponse anymore)
-                if response_type != 'FileResponse':
-                    print(f"[STEP 2]   ⚠️  RESPONSE REPLACED! Expected FileResponse, got {response_type}")
-                    # Try to see what we got instead
-                    try:
-                        if hasattr(response, 'content'):
-                            first_bytes = response.content[:80] if len(response.content) >= 80 else response.content
-                            print(f"[STEP 2]   Replacement response first bytes: {repr(first_bytes)}")
-                    except Exception as e:
-                        print(f"[STEP 2]   Cannot inspect replacement response: {e}")
+        # Never access response.content for PDF: streaming responses would be consumed and PDF would appear empty in iframe.
         
         # Check if this is a path that should be embeddable
         should_exempt = any(path.startswith(prefix) for prefix in self.FRAME_EXEMPT_PREFIXES)

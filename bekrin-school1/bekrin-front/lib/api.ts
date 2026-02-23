@@ -44,6 +44,7 @@ async function request<T>(
       headers,
       credentials: "include",
       body: options.body,
+      signal: options.signal ?? undefined,
     });
   } catch (error: any) {
     // Network error (backend server işləmir, CORS problemi, və s.)
@@ -129,7 +130,8 @@ async function request<T>(
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>(path, { method: "GET" }),
+  get: <T>(path: string, opts?: { signal?: AbortSignal }) =>
+    request<T>(path, { method: "GET", ...opts }),
   getBlob: async (path: string): Promise<Blob> => {
     const url = `${API_BASE_URL}${path}`;
     const token = getCookie("accessToken");

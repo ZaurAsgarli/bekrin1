@@ -1,10 +1,12 @@
 """
 Lesson finalize service: when teacher clicks Save, finalize the lesson and charge students.
 Uses LessonHeld and BalanceLedger for idempotent charging.
+Balance deduction uses F() expression so the DB performs the update (guaranteed persistence).
 """
 import logging
 from decimal import Decimal
 from django.db import transaction
+from django.db.models import F
 from django.conf import settings
 
 from groups.models import Group
@@ -103,9 +105,9 @@ def finalize_lesson_and_charge(group: Group, lesson_date, created_by=None):
         debit_amount = -per_lesson
         logger.info(f"[finalize_lesson] Charge amount per student: {debit_amount} (per_lesson={per_lesson})")
         
-        # Create ledger entries and update balances
+        # Create ledger entries and compute charge details; deduct balance in DB with F() (atomic, persists)
         ledger_entries = []
-        student_updates = []
+        charged_student_ids = []
         charge_details = []
         
         for sp in students:
@@ -115,12 +117,12 @@ def finalize_lesson_and_charge(group: Group, lesson_date, created_by=None):
                 logger.info(f"[finalize_lesson] Student {sp.id} ({sp.user.full_name}) is excused (uzrlu), skipping charge")
                 continue
             
-            # Refresh to get latest balance
+            # Refresh to get latest balance for response/logging only
             sp.refresh_from_db()
             old_balance = sp.balance or Decimal("0")
             new_balance = old_balance + debit_amount
             
-            logger.info(f"[finalize_lesson] Student {sp.id} ({sp.user.full_name}): balance {old_balance} -> {new_balance} (charge: {debit_amount})")
+            logger.info(f"[finalize_lesson] BEFORE BALANCE: {old_balance} DEDUCTION: {debit_amount} AFTER CALC: {new_balance} student_id={sp.id}")
             
             # Store charge details for response
             charge_details.append({
@@ -140,33 +142,38 @@ def finalize_lesson_and_charge(group: Group, lesson_date, created_by=None):
                     reason=BalanceLedger.REASON_LESSON_CHARGE,
                 )
             )
-            
-            # Prepare balance update
-            sp.balance = new_balance
-            student_updates.append(sp)
+            charged_student_ids.append(sp.id)
         
         # Bulk create ledger entries
         if ledger_entries:
             BalanceLedger.objects.bulk_create(ledger_entries)
             logger.info(f"[finalize_lesson] Created {len(ledger_entries)} BalanceLedger entries")
         
-        # Bulk update balances
-        if student_updates:
-            StudentProfile.objects.bulk_update(student_updates, ["balance"])
-            logger.info(f"[finalize_lesson] Updated {len(student_updates)} StudentProfile balances")
+        # Atomic DB update: balance = balance + debit_amount (guaranteed persistence, no in-memory bulk_update)
+        if charged_student_ids:
+            updated_count = StudentProfile.objects.filter(id__in=charged_student_ids).update(
+                balance=F("balance") + debit_amount
+            )
+            logger.info(f"[finalize_lesson] DB UPDATE balance F(): updated_count={updated_count} student_ids={charged_student_ids}")
+            for sp in students:
+                if sp.id in charged_student_ids:
+                    sp.refresh_from_db()
+                    logger.info(f"[finalize_lesson] AFTER SAVE: student_id={sp.id} balance={sp.balance} (type={type(sp.balance).__name__})")
         
-        # Verify updates by refreshing and logging
-        for sp in students:
-            sp.refresh_from_db()
-            logger.info(f"[finalize_lesson] VERIFIED Student {sp.id} ({sp.user.full_name}): final_balance={sp.balance}")
+        # Verify from DB directly
+        for sid in charged_student_ids:
+            db_balance = StudentProfile.objects.filter(id=sid).values_list("balance", flat=True).first()
+            logger.info(f"[finalize_lesson] VERIFIED from DB: student_id={sid} balance={db_balance}")
         
-        # Check and create balance zero notifications
+        # Check and create balance zero notifications (charged students already refreshed above)
         try:
             for sp in students:
+                if sp.id in charged_student_ids:
+                    sp.refresh_from_db()
                 check_and_create_balance_notifications(sp, group=group)
         except Exception as e:
             logger.error(f"[finalize_lesson] Error creating notifications: {e}", exc_info=True)
             # Don't fail the charge operation if notification creation fails
         
-        logger.info(f"[finalize_lesson] Successfully charged {len(students)} students")
-        return True, len(students), charge_details
+        logger.info(f"[finalize_lesson] Successfully charged {len(charge_details)} students")
+        return True, len(charge_details), charge_details

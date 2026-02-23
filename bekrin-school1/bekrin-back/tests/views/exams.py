@@ -1036,238 +1036,50 @@ def student_run_pdf_view(request, run_id):
         logger.warning("student_run_pdf run_id=%s exam_id=%s user_id=%s no_pdf", run_id, run.exam_id, getattr(request.user, 'id', None))
         return JsonResponse({'detail': 'No PDF for this exam'}, status=404)
     
+    # Verify file exists and has size
+    if not pdf_file.storage.exists(pdf_file.name):
+        logger.error(f"PDF file not found in storage: {pdf_file.name}")
+        return JsonResponse({'detail': 'PDF file not found on storage'}, status=404)
+    file_size = getattr(pdf_file, 'size', None)
+    if file_size is None or file_size == 0:
+        logger.error(f"PDF file is empty or size unknown: {pdf_file.name}, size={file_size}")
+        return JsonResponse({'detail': 'PDF file is empty'}, status=500)
+
     try:
-        # =====================================================
-        # STAGE 1 — VERIFY THE REAL FILE (GROUND TRUTH)
-        # =====================================================
         absolute_path = None
-        sha256_disk = None
-        disk_data = None
-        
         try:
             absolute_path = pdf_file.path
-            print(f"[STAGE 1] PATH: {absolute_path}")
-            print(f"[STAGE 1] EXISTS: {os.path.exists(absolute_path)}")
-            print(f"[STAGE 1] DJANGO SIZE: {pdf_file.size}")
-            
-            if os.path.exists(absolute_path):
-                os_size = os.path.getsize(absolute_path)
-                print(f"[STAGE 1] OS SIZE: {os_size}")
-                
-                with open(absolute_path, "rb") as f:
-                    disk_data = f.read()
-                
-                print(f"[STAGE 1] HEADER: {disk_data[:20]}")
-                print(f"[STAGE 1] FOOTER: {disk_data[-20:]}")
-                
-                sha256_disk = hashlib.sha256(disk_data).hexdigest()
-                print(f"[STAGE 1] SHA256_DISK: {sha256_disk}")
-                
-                # Validate PDF structure
-                has_valid_header = disk_data.startswith(b'%PDF')
-                has_valid_footer = b'%%EOF' in disk_data[-1024:]  # Check last 1KB for footer
-                
-                print(f"[STAGE 1] VALID HEADER: {has_valid_header}")
-                print(f"[STAGE 1] VALID FOOTER: {has_valid_footer}")
-                
-                if not has_valid_header:
-                    logger.error(f"[STAGE 1] PDF missing header: {absolute_path}")
-                    return JsonResponse({'detail': 'Invalid PDF file format - missing header'}, status=500)
-                
-                if not has_valid_footer:
-                    logger.warning(f"[STAGE 1] PDF missing footer (may be valid): {absolute_path}")
+        except (AttributeError, NotImplementedError):
+            pass
+
+        # STEP 4 test: force full body response to rule out streaming issues
+        if request.GET.get('force_body') == '1':
+            if absolute_path and os.path.exists(absolute_path):
+                with open(absolute_path, 'rb') as f:
+                    data = f.read()
             else:
-                logger.error(f"[STAGE 1] File path does not exist: {absolute_path}")
-                return JsonResponse({'detail': 'PDF file not found on disk'}, status=404)
-                
-        except (AttributeError, NotImplementedError) as e:
-            # Remote storage - cannot access path directly
-            logger.warning(f"[STAGE 1] Cannot access file path (remote storage): {e}")
-            absolute_path = None
-        
-        # Verify file exists in storage
-        if not pdf_file.storage.exists(pdf_file.name):
-            logger.error(f"PDF file not found in storage: {pdf_file.name}")
-            return JsonResponse({'detail': 'PDF file not found on storage'}, status=404)
-        
-        # Get file size from storage
-        file_size = pdf_file.size
-        if file_size is None or file_size == 0:
-            logger.error(f"PDF file is empty or size unknown: {pdf_file.name}, size={file_size}")
-            return JsonResponse({'detail': 'PDF file is empty'}, status=500)
-        
-        # =====================================================
-        # STAGE 2 — VERIFY FILE OBJECT BEFORE RESPONSE
-        # =====================================================
-        # Open SEPARATE file handle for verification (don't reuse for response)
-        verify_handle = pdf_file.open('rb')
-        
-        # Read all bytes from verification handle
-        raw = verify_handle.read()
-        sha256_memory = hashlib.sha256(raw).hexdigest()
-        memory_size = len(raw)
-        
-        print(f"[STAGE 2] SHA256_MEMORY: {sha256_memory}")
-        print(f"[STAGE 2] MEMORY_SIZE: {memory_size}")
-        print(f"[STAGE 2] MEMORY_HEADER: {raw[:20]}")
-        print(f"[STAGE 2] MEMORY_FOOTER: {raw[-20:]}")
-        
-        # Compare disk vs memory
-        if absolute_path and sha256_disk:
-            if sha256_disk != sha256_memory:
-                logger.error(f"[STAGE 2] HASH MISMATCH: DISK={sha256_disk[:16]}... != MEMORY={sha256_memory[:16]}...")
-                verify_handle.close()
-                return JsonResponse({'detail': 'File integrity check failed - storage backend corruption'}, status=500)
-            else:
-                print(f"[STAGE 2] HASH MATCH: DISK == MEMORY")
-        
-        # Close verification handle - we're done with it
-        verify_handle.close()
-        
-        # =====================================================
-        # STAGE 3 — CREATE FRESH FILE HANDLE FOR RESPONSE
-        # =====================================================
-        # CRITICAL FIX: Open a FRESH file handle for FileResponse
-        # Problem: Reusing a handle that was read() from causes issues:
-        # 1. Some storage backends don't support seek()
-        # 2. FileResponse might cache handle state
-        # 3. Consuming streaming_content exhausts the iterator
-        # Solution: Use separate handles - one for verification, one for response
-        
-        file_handle = pdf_file.open('rb')
-        
-        # Verify the fresh handle is readable (peek only, don't read all)
-        try:
-            peek_bytes = file_handle.read(10)
-            if not peek_bytes.startswith(b'%PDF-'):
-                logger.error(f"[STAGE 3] Fresh handle missing PDF header: {peek_bytes[:10]}")
-                file_handle.close()
-                return JsonResponse({'detail': 'Invalid PDF file format'}, status=500)
-            
-            # Try to seek back - if it fails, handle doesn't support seeking
-            try:
-                file_handle.seek(0)
-                print(f"[STAGE 3] Fresh handle verified - header: {peek_bytes[:10]}, seek supported")
-            except (AttributeError, OSError, io.UnsupportedOperation) as e:
-                # Handle doesn't support seeking - close and reopen
-                logger.warning(f"[STAGE 3] Handle doesn't support seek: {e}, reopening")
-                file_handle.close()
-                file_handle = pdf_file.open('rb')
-                print(f"[STAGE 3] Fresh handle reopened (no seek support)")
-        except Exception as e:
-            logger.error(f"[STAGE 3] Error verifying fresh handle: {e}")
-            file_handle.close()
-            return JsonResponse({'detail': 'Error reading PDF file'}, status=500)
-        
-        # =====================================================
-        # STEP 1 — CAPTURE FIRST BYTES FROM REAL FILE
-        # =====================================================
+                with pdf_file.open('rb') as f:
+                    data = f.read()
+            response = HttpResponse(data, content_type='application/pdf')
+            response['Content-Disposition'] = 'inline'
+            logger.info(f"PDF served (force_body) run_id={run_id} size={len(data)}")
+            return response
+
+        # Minimal response: file handle + content-type + Content-Disposition only.
+        # No Content-Length, Accept-Ranges, Cache-Control — let Django handle streaming.
         if absolute_path and os.path.exists(absolute_path):
-            with open(absolute_path, "rb") as real_file:
-                real_file_header = real_file.read(15)
-                print(f"[STEP 1] REAL FILE HEADER: {real_file_header}")
-                print(f"[STEP 1] REAL FILE HEADER (repr): {repr(real_file_header)}")
-                print(f"[STEP 1] STARTS WITH %PDF: {real_file_header.startswith(b'%PDF')}")
-        
-        # Create FileResponse with fresh handle
-        response = FileResponse(
-            file_handle,
-            content_type='application/pdf',
-            as_attachment=False
-        )
-        
-        # =====================================================
-        # STEP 1 (continued) — INTERCEPT BYTES SENT TO CLIENT
-        # =====================================================
-        # Wrap streaming_content to capture what's actually sent
-        original_stream = response.streaming_content
-        
-        def debug_stream():
-            """Intercept streaming content to see what's actually sent to browser"""
-            first_chunk = None
-            chunk_count = 0
-            total_bytes = 0
-            
-            for chunk in original_stream:
-                chunk_count += 1
-                total_bytes += len(chunk)
-                
-                if first_chunk is None:
-                    first_chunk = chunk[:80] if len(chunk) >= 80 else chunk
-                    print(f"[STEP 1] ACTUAL BYTES SENT TO CLIENT (first 80): {first_chunk}")
-                    print(f"[STEP 1] ACTUAL BYTES SENT (repr): {repr(first_chunk)}")
-                    print(f"[STEP 1] STARTS WITH %PDF: {first_chunk.startswith(b'%PDF')}")
-                    print(f"[STEP 1] STARTS WITH <!DOCTYPE: {first_chunk.startswith(b'<!DOCTYPE')}")
-                    print(f"[STEP 1] STARTS WITH {{\"detail\": {first_chunk.startswith(b'{\"detail\"')}")
-                    print(f"[STEP 1] First chunk size: {len(chunk)}")
-                
-                yield chunk
-            
-            print(f"[STEP 1] Total chunks streamed: {chunk_count}")
-            print(f"[STEP 1] Total bytes streamed: {total_bytes}")
-        
-        response.streaming_content = debug_stream()
-        
-        # STAGE 3: FileResponse should stream the same bytes we verified
-        sha256_stream = sha256_memory  # Expected to match
-        stream_size = memory_size  # Expected to match
-        
-        print(f"[STAGE 3] FileResponse created with streaming wrapper")
-        print(f"[STAGE 3] Response type: {type(response).__name__}")
-        print(f"[STAGE 3] Response Content-Type: {response.get('Content-Type')}")
-        print(f"[STAGE 3] Response status_code: {response.status_code}")
-        
-        # =====================================================
-        # STAGE 4 — ADD DEBUG HEADERS
-        # =====================================================
-        response['Content-Length'] = str(file_size)
-        response['Accept-Ranges'] = 'bytes'
-        response['Cache-Control'] = 'private, max-age=3600'
-        
-        # Debug headers for browser verification
-        if sha256_disk:
-            response['X-Debug-SHA256-Disk'] = sha256_disk
-        if sha256_memory:
-            response['X-Debug-SHA256-Memory'] = sha256_memory
-        if sha256_stream:
-            response['X-Debug-SHA256-Stream'] = sha256_stream
-        response['X-Debug-Size'] = str(file_size)
-        response['X-Debug-Source'] = pdf_source
-        
-        # =====================================================
-        # STEP 2 & 3 — LOG RESPONSE STATUS BEFORE RETURNING
-        # =====================================================
-        print(f"[STEP 2] STATUS CODE: {response.status_code}")
-        print(f"[STEP 2] CONTENT-TYPE: {response.get('Content-Type')}")
-        print(f"[STEP 2] RESPONSE TYPE: {type(response).__name__}")
-        print(f"[STEP 2] HAS STREAMING_CONTENT: {hasattr(response, 'streaming_content')}")
-        print(f"[STEP 2] IS STREAMING: {response.streaming}")
-        
-        logger.info(
-            f"PDF BINARY FORENSIC - "
-            f"source={pdf_source}, "
-            f"file={pdf_file.name}, "
-            f"size={file_size}, "
-            f"status={response.status_code}, "
-            f"content_type={response.get('Content-Type')}, "
-            f"sha256_disk={sha256_disk[:16] if sha256_disk else 'N/A'}..., "
-            f"sha256_memory={sha256_memory[:16]}..."
-        )
-        
-        print(f"[VIEW RETURN] Returning FileResponse - status={response.status_code}, type={type(response).__name__}")
-        
-        # X-Frame-Options will be handled by FrameOptionsExemptMiddleware to allow iframe embedding
+            file_handle = open(absolute_path, 'rb')
+        else:
+            file_handle = pdf_file.open('rb')
+
+        response = FileResponse(file_handle, content_type='application/pdf', as_attachment=False)
+        response['Content-Disposition'] = 'inline'
+        logger.info(f"PDF served run_id={run_id} source={pdf_source} file={pdf_file.name} size={file_size}")
         return response
-        
+
     except Exception as e:
-        print(f"[STEP 2] EXCEPTION CAUGHT in student_run_pdf_view")
-        print(f"[STEP 2]   Exception type: {type(e).__name__}")
-        print(f"[STEP 2]   Exception: {e}")
-        print(f"[STEP 2]   ⚠️  Returning JsonResponse instead of FileResponse")
         logger.exception(
-            f"student_run_pdf stream error - "
-            f"run_id={run_id}, exam_id={run.exam_id}, user_id={getattr(request.user, 'id', None)}, "
-            f"error={e}"
+            f"student_run_pdf error run_id={run_id}, exam_id={run.exam_id}, user_id={getattr(request.user, 'id', None)}, error={e}"
         )
         return JsonResponse({'detail': 'Could not serve PDF'}, status=500)
 
@@ -2552,6 +2364,9 @@ def teacher_pdfs_view(request):
         file_obj = request.FILES.get('file') or (request.data.get('file') if hasattr(request.data, 'get') else None)
         if not file_obj:
             return Response({'error': 'file is required'}, status=status.HTTP_400_BAD_REQUEST)
+        # Reset file pointer so storage saves full content (avoid 0-byte / 0-page PDFs if anything read the file earlier)
+        if hasattr(file_obj, 'seek') and callable(file_obj.seek):
+            file_obj.seek(0)
         data['file'] = file_obj
         if not data.get('title'):
             data['title'] = getattr(file_obj, 'name', '') or 'PDF'
